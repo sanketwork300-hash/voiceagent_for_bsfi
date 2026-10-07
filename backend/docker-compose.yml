@@ -1,0 +1,78 @@
+# Development stack. `docker compose up` -> backend + mock bank + Postgres + Redis + Elasticsearch.
+# Voice:          docker compose --profile voice up         (adds LiveKit server + voice worker)
+# Observability:  docker compose --profile observability up (adds Jaeger; set OTEL_EXPORTER_OTLP_ENDPOINT)
+x-backend-env: &backend-env
+  env_file: [.env]
+  environment:
+    DATABASE_URL: postgresql+asyncpg://bfsi:bfsi@postgres:5432/bfsi
+    REDIS_URL: redis://redis:6379/0
+    ELASTICSEARCH_URL: http://elasticsearch:9200
+    MOCK_BANK_URL: http://mock-bank:8100
+    LIVEKIT_URL: ws://livekit:7880                                   # in-network address for the worker / API
+    LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}   # what browsers/apps connect to
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment: {POSTGRES_USER: bfsi, POSTGRES_PASSWORD: bfsi, POSTGRES_DB: bfsi}
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U bfsi"], interval: 5s, timeout: 3s, retries: 20}
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    healthcheck: {test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 20}
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"   # dev only — enable security + TLS in any shared environment
+      ES_JAVA_OPTS: -Xms1g -Xmx1g
+    ports: ["9200:9200"]
+    volumes: [esdata:/usr/share/elasticsearch/data]
+    healthcheck: {test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s"], interval: 10s, timeout: 10s, retries: 30}
+
+  mock-bank:
+    build: .
+    command: ["uvicorn", "mock_bank.app:app", "--host", "0.0.0.0", "--port", "8100"]
+    ports: ["8100:8100"]
+    healthcheck: {test: ["CMD", "curl", "-fsS", "http://localhost:8100/health"], interval: 5s, timeout: 3s, retries: 20}
+
+  backend:
+    build: .
+    <<: *backend-env
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      elasticsearch: {condition: service_healthy}
+      mock-bank: {condition: service_healthy}
+
+  voice-agent:
+    profiles: [voice]
+    build: {context: ., args: {INSTALL_VOICE: "1"}}
+    <<: *backend-env
+    command: ["sh", "-c", "python -m app.channels.voice.livekit_agent download-files && python -m app.channels.voice.livekit_agent start"]
+    healthcheck: {test: ["CMD", "curl", "-fsS", "http://localhost:8081/"], interval: 15s, timeout: 3s, retries: 10}
+    depends_on:
+      backend: {condition: service_healthy}
+      livekit: {condition: service_started}
+
+  livekit:
+    profiles: [voice]
+    image: livekit/livekit-server:latest
+    command: ["--dev", "--bind", "0.0.0.0"]   # dev keys: devkey / secret
+    ports: ["7880:7880", "7881:7881", "7882:7882/udp"]
+
+  jaeger:
+    profiles: [observability]
+    image: jaegertracing/all-in-one:1.62.0
+    environment: {COLLECTOR_OTLP_ENABLED: "true"}
+    ports: ["16686:16686", "4318:4318"]
+
+volumes:
+  pgdata:
+  esdata:
