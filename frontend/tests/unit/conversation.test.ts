@@ -94,4 +94,27 @@ describe("conversation reducer", () => {
     expect(lastAgent(s)).toMatchObject({ status: "done", text: "ok" });
     expect(lastAgent(s).tools[0].status).toBe("completed");
   });
+
+  it("progress acknowledgements update the status label but never create a receipt", () => {
+    let s = send(initialConversation("FULLY_AUTHENTICATED"), "yes");
+    s = apply(s, { type: "processing.started" }, { type: "tool.started", tool: "transfer_money", data: { step_id: "s1", parallel_group: 5 } },
+      { type: "workflow.progress", content: "Processing your request now. I'll confirm as soon as the bank responds.", data: { phase: "submitting" } });
+    expect(lastAgent(s).statusLabel).toContain("Processing your request");
+    expect(lastAgent(s).slips).toHaveLength(0);
+    s = apply(s, { type: "verification.completed", tool: "transfer_money", data: { status: "SUCCESS", method: "status_lookup", reference: "IMPS1" } },
+      { type: "tool.completed", tool: "transfer_money", data: { latency_ms: 30, result: { status: "SUCCESS", transaction_ref: "IMPS1" } } });
+    const m = lastAgent(s);
+    expect(m.tools[0]).toMatchObject({ status: "completed", verification: "SUCCESS", parallelGroup: 5 });
+    expect(m.slips).toEqual([expect.objectContaining({ kind: "receipt" })]);
+  });
+
+  it("parallel lookups are traced as one execution wave", () => {
+    let s = send(initialConversation("FULLY_AUTHENTICATED"), "balance and transactions");
+    s = apply(s, { type: "tool.started", tool: "get_account_balance", data: { parallel_group: 1 } },
+      { type: "tool.started", tool: "get_recent_transactions", data: { parallel_group: 1 } },
+      { type: "tool.completed", tool: "get_recent_transactions", data: { latency_ms: 20 } },
+      { type: "tool.completed", tool: "get_account_balance", data: { latency_ms: 25 } });
+    expect(lastAgent(s).tools.map((t) => [t.tool, t.status, t.parallelGroup])).toEqual([
+      ["get_account_balance", "completed", 1], ["get_recent_transactions", "completed", 1]]);
+  });
 });

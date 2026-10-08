@@ -20,7 +20,7 @@ from sqlalchemy import select
 from app.database.models import Policy
 from app.database.session import Database
 from app.domain import AuthMethod, AuthState, PolicyDecisionType, RiskLevel
-from app.policies.approval import ActionGrant, ApprovalService, action_hash
+from app.policies.approval import ActionGrant, ApprovalService, context_action_hash
 from app.policies.risk import RiskScorer
 from app.policies.rules import DEFAULT_RULES, PolicyRule, rule_matches
 from app.tools.schemas import ToolContext, ToolDefinition
@@ -82,7 +82,7 @@ class PolicyEngine:
 
     async def evaluate(self, tool: ToolDefinition, args: dict[str, Any], ctx: ToolContext, *,
                        allowed_tools: set[str] | None = None, grant: ActionGrant | None = None) -> PolicyDecision:
-        ahash = action_hash(tool.name, args)
+        ahash = context_action_hash(tool.name, args, ctx)
         assessment = self.scorer.assess(tool=tool.name, base=tool.risk_level, args=args, channel=ctx.channel.value,
                                         intent=ctx.intent, session=ctx.session_stats)
         risk = assessment.level

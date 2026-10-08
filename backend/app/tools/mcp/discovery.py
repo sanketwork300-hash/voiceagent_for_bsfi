@@ -37,6 +37,9 @@ def governance_from_annotations(tool: dict[str, Any]) -> dict[str, Any]:
         "intents": meta.get("intents", []),
         "confirmation_template": meta.get("confirmation_template"),
         "internal": bool(meta.get("internal", False)),
+        # scheduling hints (operation_type, side_effect, idempotent, concurrency_group, ...): resolve_execution
+        # merges them with readOnlyHint conservatively at load time
+        "execution": dict(meta.get("execution") or {}),
     }
 
 
@@ -55,6 +58,8 @@ async def discover_and_register(db: Database, client: MCPClient, server: MCPServ
                               name=rt["name"], is_enabled=auto_enable, **gov)
                 s.add(row)
             # schema/description refresh; governance fields are left as the admin configured them
+            if not row.execution and gov["execution"]:
+                row.execution = gov["execution"]
             row.description = rt.get("description", "")
             row.input_schema = rt.get("inputSchema") or {"type": "object", "properties": {}}
             row.annotations = rt.get("annotations") or {}

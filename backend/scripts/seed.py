@@ -37,7 +37,8 @@ async def seed_tenant(c: Container, *, slug: str, name: str, mock_bank_url: str,
         return existing
     tenant = Tenant(id=new_id(), slug=slug, name=name, institution_type="bank", default_language="en",
                     supported_languages=["en", "hi", "mr", "ta", "te", "bn", "kn", "gu", "pa", "ml"],
-                    settings={"sip_numbers": ["+912261234567"]})
+                    # inbound numbers come from configuration (DEMO_SIP_NUMBERS), never from code
+                    settings={"sip_numbers": list(c.settings.demo_sip_numbers)})
     async with c.db.session() as s:
         s.add(tenant)
         await s.flush()  # parent row first: users/agents reference it

@@ -188,6 +188,8 @@ RuntimeEventType = Literal[
     "confirmation.required",
     "approval.required",
     "handoff.initiated",
+    "workflow.progress",
+    "verification.completed",
     "message.completed",
     "error",
 ]

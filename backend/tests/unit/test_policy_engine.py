@@ -9,7 +9,7 @@ from app.domain import (
     PolicyDecisionType,
     RiskLevel,
 )
-from app.policies.approval import ActionGrant, action_hash
+from app.policies.approval import ActionGrant, action_hash as _action_hash
 from app.policies.risk import RiskScorer
 from app.policies.rules import PolicyRule, rule_matches
 from app.tools.schemas import ToolContext, ToolDefinition, ToolSource
@@ -21,6 +21,10 @@ BLOCK = ToolDefinition(name="block_card", description="b", source=ToolSource.MCP
                        min_auth_state=AuthState.FULLY_AUTHENTICATED, requires_confirmation=True)
 BALANCE = ToolDefinition(name="get_account_balance", description="b", source=ToolSource.OPENAPI, risk_level=RiskLevel.MEDIUM,
                          min_auth_state=AuthState.FULLY_AUTHENTICATED)
+
+
+def action_hash(tool, args):  # bound to the tenant/session/customer of ctx() below
+    return _action_hash(tool, args, tenant_id="t1", session_id="s1", customer_id="CUST1")
 
 
 def ctx(auth=AuthState.FULLY_AUTHENTICATED, methods=("customer_assertion",), intent=Intent.ACTION_REQUEST, txn=None, **stats):

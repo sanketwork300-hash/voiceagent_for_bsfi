@@ -206,7 +206,7 @@ async def test_monitoring_and_mcp_listing(api):
     act = (await api.get("/monitoring/activity", headers=admin)).json()
     assert {a["kind"] for a in act} >= {"tool", "handoff"}
     servers = (await api.get("/mcp/servers", headers=admin)).json()
-    assert servers[0]["tool_count"] == 3 and servers[0]["name"] == "mock-bank-mcp"
+    assert servers[0]["tool_count"] == 5 and servers[0]["name"] == "mock-bank-mcp"
 
 
 async def test_failure_outcome_reported(api, container):

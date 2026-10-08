@@ -7,7 +7,7 @@ export type BackendFrame =
   | { type: "processing.started"; data?: { request_id?: string } }
   | { type: "intent.detected"; data: { intent: string; confidence: number; language: string; language_tag?: string; carried_over: boolean } }
   | { type: "message.delta"; content: string }
-  | { type: "tool.started"; tool: string }
+  | { type: "tool.started"; tool: string; data?: { step_id?: string; workflow_id?: string; parallel_group?: number } }
   | { type: "tool.completed"; tool: string; data: { latency_ms: number | null; source?: string; risk_level?: RiskLevel; result?: unknown } }
   | { type: "tool.failed"; tool: string; data: { error: string | null; policy_decision: string | null; outcome?: FailureOutcome; latency_ms?: number | null; source?: string } }
   | { type: "knowledge.sources"; data: { sources: SourceCitation[] } }
@@ -15,6 +15,10 @@ export type BackendFrame =
   | { type: "confirmation.required"; tool: string; data: ConfirmationData }
   | { type: "approval.required"; tool: string; data: ApprovalData }
   | { type: "handoff.initiated"; data: { handoff_id: string; reason: string; priority: string } }
+  // Neutral progress acknowledgement from the execution engine ("Processing…", "Still checking…"). Never implies success.
+  | { type: "workflow.progress"; content?: string | null; tool?: string | null; data: { phase: string; workflow_id?: string; step_id?: string; mutation?: boolean } }
+  // Outcome check of an account change against the bank's records (after execution, before the receipt).
+  | { type: "verification.completed"; tool?: string | null; data: { status: VerificationStatus | null; method?: string | null; reference?: string | null; step_id?: string | null } }
   | { type: "message.completed"; response: AgentResponse }
   | { type: "message.interrupted" }
   | { type: "human.message"; content: string }
@@ -23,6 +27,8 @@ export type BackendFrame =
   | { type: "approval.decided"; status: string }
   | { type: "error"; content?: string }
   | { type: "pong" };
+
+export type VerificationStatus = "SUCCESS" | "FAILED" | "PARTIAL" | "UNKNOWN" | "TIMEOUT";
 
 export interface AuthRequiredData {
   step: "identify" | "otp";

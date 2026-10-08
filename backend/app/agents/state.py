@@ -50,6 +50,10 @@ class PendingAction(BaseModel):
     approval_id: str | None = None
     confirmed: bool = False
     intent: Intent | None = None
+    # Set when the action is a step of a durable workflow (app.agents.execution): resuming continues that workflow.
+    workflow_id: str | None = None
+    step_id: str | None = None
+    bound_params: list[str] = Field(default_factory=list)  # args filled by earlier workflow steps (not LLM output)
     created_at: datetime = Field(default_factory=utcnow)
     expires_at: datetime
 
@@ -100,6 +104,10 @@ class SessionState(BaseModel):
     last_tool_results: list[ToolResultMemo] = Field(default_factory=list)
     rag_context: list[SourceCitation] = Field(default_factory=list)
     voice_room: str | None = None
+    active_workflow_id: str | None = None  # workflow with a hold, or a mutation not yet verified/told to the customer
+    last_action_workflow_id: str | None = None  # most recent workflow that contained an account change
+    call_id: str | None = None  # active voice call (voice_calls.id); provider-independent
+    version: int = 0  # compare-and-set counter for saves made under the session lock
     created_at: datetime = Field(default_factory=utcnow)
     last_activity_at: datetime = Field(default_factory=utcnow)
 

@@ -19,7 +19,10 @@ from app.tools.mcp.transport import (
     StdioTransport,
     StreamableHTTPTransport,
 )
+from app.tools.failures import FailureCategory
 from app.tools.schemas import ToolContext, ToolDefinition, ToolExecutionError
+
+_CATEGORIES = {c.value for c in FailureCategory}
 
 
 class MCPClient:
@@ -53,9 +56,13 @@ class MCPClient:
             if not cursor:
                 return tools
 
-    async def call_tool(self, name: str, arguments: dict[str, Any], timeout: float = 15) -> dict[str, Any]:
+    async def call_tool(self, name: str, arguments: dict[str, Any], timeout: float = 15,
+                        meta: dict[str, Any] | None = None) -> dict[str, Any]:
         await self.initialize()
-        return await self.transport.request("tools/call", {"name": name, "arguments": arguments}, timeout=timeout)
+        params: dict[str, Any] = {"name": name, "arguments": arguments}
+        if meta:
+            params["_meta"] = meta  # MCP request metadata: carries the idempotency key to the institution
+        return await self.transport.request("tools/call", params, timeout=timeout)
 
     async def aclose(self) -> None:
         await self.transport.aclose()
@@ -73,7 +80,9 @@ def parse_tool_result(res: dict[str, Any]) -> Any:
             data = {"text": joined}
     if res.get("isError"):
         msg = data.get("error") if isinstance(data, dict) else None
-        raise ToolExecutionError(str(msg or data)[:300])
+        code = data.get("code") if isinstance(data, dict) else None
+        # a tool-level error is an explicit answer from the institution: nothing was processed (unless it says otherwise)
+        raise ToolExecutionError(str(msg or data)[:300], category=code if code in _CATEGORIES else "BUSINESS_RULE_FAILURE")
     return data
 
 
@@ -94,7 +103,7 @@ class MCPToolExecutor:
             server = (await s.execute(select(MCPServer).where(
                 MCPServer.tenant_id == tenant_id, MCPServer.id == server_id))).scalar_one_or_none()
         if server is None or not server.is_enabled:
-            raise ToolExecutionError("MCP server not available")
+            raise ToolExecutionError("MCP server not available", sent=False, category="DEPENDENCY_UNAVAILABLE")
         headers: dict[str, str] = {}
         if server.integration_id:
             cfg = await self.credentials.get(tenant_id, server.integration_id)
@@ -113,11 +122,14 @@ class MCPToolExecutor:
     async def execute(self, tool: ToolDefinition, args: dict[str, Any], ctx: ToolContext) -> Any:
         server_id = tool.binding["server_id"]
         client = await self.client_for(ctx.tenant_id, server_id)
+        meta = {k: v for k, v in {"idempotency_key": ctx.idempotency_key, "request_id": ctx.request_id,
+                                  "workflow_id": ctx.workflow_id}.items() if v}
         try:
-            res = await client.call_tool(tool.binding.get("remote_name", tool.name), args, timeout=tool.timeout_seconds)
+            res = await client.call_tool(tool.binding.get("remote_name", tool.name), args, timeout=tool.timeout_seconds,
+                                         meta=meta or None)
         except MCPTransportError as e:
             self.drop(ctx.tenant_id, server_id)  # force re-initialise next time (session may have expired)
-            raise ToolExecutionError(str(e), retryable=True) from e
+            raise ToolExecutionError(str(e), retryable=True, category=e.category, sent=e.sent) from e
         return parse_tool_result(res)
 
     async def aclose(self) -> None:

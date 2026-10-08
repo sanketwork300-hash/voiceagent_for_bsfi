@@ -5,6 +5,10 @@ Governance comes from vendor extensions on each operation (defaults are conserva
   x-bfsi-requires-confirmation: bool               x-bfsi-injected: {param: context_key}
   x-bfsi-intents: [Intent, ...]                    x-bfsi-internal: bool
   x-bfsi-confirmation-template: str                x-bfsi-tool: false  (exclude operation)
+Scheduling metadata (merged conservatively by `resolve_execution`: a POST can never become a parallel read):
+  x-bfsi-operation-type: READ|WRITE|VERIFY         x-bfsi-side-effect: NONE|ACCOUNT_READ|ACCOUNT_MUTATION|FINANCIAL_MUTATION|EXTERNAL_SIDE_EFFECT
+  x-bfsi-parallel-safe: bool                       x-bfsi-idempotent: bool
+  x-bfsi-concurrency-group: str                    x-bfsi-depends-on: [tool, ...]     x-bfsi-max-concurrency: int
 """
 
 from __future__ import annotations
@@ -13,9 +17,13 @@ import re
 from typing import Any
 
 from app.domain import AuthState, Intent, RiskLevel
-from app.tools.schemas import ToolDefinition, ToolSource
+from app.tools.schemas import ToolDefinition, ToolSource, resolve_execution
 
 _METHODS = ("get", "post", "put", "patch", "delete")
+_CREDENTIAL_HEADERS = {"authorization", "x-api-key", "api-key", "apikey", "cookie", "proxy-authorization"}
+_EXEC_EXT = {"x-bfsi-operation-type": "operation_type", "x-bfsi-side-effect": "side_effect", "x-bfsi-parallel-safe": "parallel_safe",
+             "x-bfsi-idempotent": "idempotent", "x-bfsi-concurrency-group": "concurrency_group",
+             "x-bfsi-depends-on": "depends_on", "x-bfsi-max-concurrency": "max_concurrency"}
 
 
 def _snake(s: str) -> str:
@@ -55,6 +63,8 @@ def import_openapi(spec: dict[str, Any], *, integration_id: str) -> list[ToolDef
             for p in _resolve(spec, shared + op.get("parameters", [])):
                 if p.get("in") not in ("path", "query", "header"):
                     continue
+                if p.get("in") == "header" and str(p.get("name", "")).lower() in _CREDENTIAL_HEADERS:
+                    continue  # credentials come from the integration, never from model arguments
                 schema = dict(p.get("schema") or {"type": "string"})
                 if p.get("description"):
                     schema["description"] = p["description"]
@@ -69,6 +79,9 @@ def import_openapi(spec: dict[str, Any], *, integration_id: str) -> list[ToolDef
                     pmap[k] = "body"
                 required += [r for r in body.get("required", []) if r not in required]
             risk = RiskLevel(op.get("x-bfsi-risk-level", "MEDIUM" if method == "get" else "HIGH"))
+            binding = {"method": method.upper(), "path": path, "parameter_map": pmap, "operation_id": op.get("operationId")}
+            declared = {field: op[ext] for ext, field in _EXEC_EXT.items() if ext in op}
+            idempotent = bool(op.get("x-bfsi-idempotent", method == "get"))
             tools.append(ToolDefinition(
                 name=name,
                 description=(op.get("description") or op.get("summary") or name).strip(),
@@ -78,11 +91,14 @@ def import_openapi(spec: dict[str, Any], *, integration_id: str) -> list[ToolDef
                 requires_confirmation=bool(op.get("x-bfsi-requires-confirmation", method != "get")),
                 source=ToolSource.OPENAPI,
                 integration_id=integration_id,
-                binding={"method": method.upper(), "path": path, "parameter_map": pmap, "operation_id": op.get("operationId")},
+                binding=binding,
                 injected_params=op.get("x-bfsi-injected", {}),
                 intents=[Intent(i) for i in op.get("x-bfsi-intents", [])],
                 confirmation_template=op.get("x-bfsi-confirmation-template"),
-                idempotent=method == "get",
+                idempotent=idempotent,
                 internal=bool(op.get("x-bfsi-internal", False)),
+                execution=resolve_execution(source=ToolSource.OPENAPI, binding=binding, idempotent=idempotent,
+                                            internal=bool(op.get("x-bfsi-internal", False)), declared=declared,
+                                            default_group=integration_id),
             ))
     return tools

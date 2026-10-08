@@ -10,7 +10,8 @@ policy, authentication, PII protection, handoff and audit are shared code.
             └──────────────┬───────────────────────┘
                            ▼
                  AgentRuntime / Orchestrator  ── shared session + conversation state (Redis + Postgres)
-                  planner (intent) · LLM loop · pending-action state machine
+                  Reason → Plan → Policy → Act → Verify → Respond · pending-action state machine
+                  execution engine: DAG of tool steps · parallel reads · serialized, verified money movement
                            │
         ┌──────────────────┼──────────────────────┐
    search_knowledge     Tool Gateway  ───────►  Policy Engine (auth level + factor strength,
@@ -21,7 +22,8 @@ policy, authentication, PII protection, handoff and audit are shared code.
 
 The platform never touches an institution's database: customer data and operations go through REST,
 OpenAPI-described APIs, MCP servers or registered adapters. The LLM proposes tool calls; only the policy
-engine can authorise them.
+engine can authorise them, and the execution engine — not the model — decides what runs in parallel, what waits, and
+whether an action really succeeded ([docs/orchestration.md](docs/orchestration.md)).
 
 ## Quickstart (Docker)
 
@@ -35,6 +37,10 @@ pip install -e . && python -m scripts.demo   # end-to-end prototype walkthrough 
 bank's OpenAPI tools and MCP server, and the four sample PDFs (indexed into Elasticsearch).
 Staff logins: `admin@ / supervisor@ / agent@ / auditor@demo-bank.example`, password `DemoBank!2026secure`.
 The mock bank's OTP is always `123456`.
+
+Phone: inbound calls arrive on a **LiveKit Phone Number** (or a carrier SIP trunk into LiveKit SIP); bind numbers to
+the agent with `python -m scripts.provision_telephony --tenant demo-bank --number <E.164>` — see
+[docs/voice.md](docs/voice.md#phone-numbers-setup). Every call gets its own session; caller-id only identifies.
 
 Voice: `docker compose --profile voice up -d` adds a local LiveKit server and the voice worker. Set
 `STT_PROVIDER`/`TTS_PROVIDER` and their keys (e.g. `DEEPGRAM_API_KEY`, `SARVAM_API_KEY`) — see [docs/voice.md](docs/voice.md).
@@ -58,7 +64,9 @@ DATABASE_URL=sqlite+aiosqlite:///./dev.db DB_AUTO_CREATE=true AUTO_SEED=true RED
 | Chat: *"What is my loan balance?"* | `CUSTOMER_DATA_QUERY` → `get_loan_details` (mock bank **OpenAPI**) → policy ALLOW (fully authenticated) |
 | Voice: *"Mera credit card ka outstanding kitna hai?"* | LiveKit → STT → same runtime → `get_card_status` (mock bank **MCP**) → Hinglish reply → speech rendering ("23 hazaar 450 rupaye") → TTS |
 | *"Block my card."* | clarifies which card → `block_card` → policy `REQUIRE_CONFIRMATION` → "yes" → executes the frozen call |
-| *"Transfer ₹100,000 to Rahul."* | `transfer_money` (CRITICAL) → `REQUIRE_AUTH` (transaction OTP bound to this exact action) → `REQUIRE_CONFIRMATION` → execute → transaction auth consumed |
+| *"Transfer ₹100,000 to Rahul."* | workflow: `find_beneficiary` → validate (exactly one active beneficiary) → `transfer_money` (CRITICAL) → `REQUIRE_AUTH` (transaction OTP bound to this exact action) → `REQUIRE_CONFIRMATION` of the resolved beneficiary → execute with an idempotency key → verify by status lookup → receipt |
+| *"What's my balance and my last transactions?"* | two independent reads in one parallel wave, each policy-checked |
+| *"Yes, but make it ₹50,000"* (at the confirmation) | the ₹1,00,000 action is **not** executed; a new action is created and needs its own OTP + confirmation |
 
 Also: ₹5 lakh+ transfers go to maker-checker approval (`/approvals`), fraud reports create an urgent
 handoff with full context, and customers can move between chat and voice mid-conversation.
@@ -80,8 +88,8 @@ for offline use only — use a multilingual embedding model in production.
 ## Tests, evaluation, load
 
 ```bash
-pytest                                                    # 119 unit / integration / security / evaluation tests
-BFSI_INFRA_TESTS=1 pytest tests/integration/test_real_infrastructure.py   # against real Postgres/Redis/ES
+pytest                                                    # 186 unit / integration / security / evaluation tests
+BFSI_INFRA_TESTS=1 pytest tests/integration/test_real_infrastructure.py   # real Postgres/Redis/ES, incl. 3 workers on Redis
 docker compose exec backend python -m scripts.run_evaluation              # scenario suite on chat AND voice
 python -m scripts.load_test --users 25 --turns 8                          # concurrency + latency percentiles
 ```
@@ -92,13 +100,28 @@ payments, FAQs, rates, card block, transfer, cancel, maker-checker, fraud, hando
 tenant escape, PII storage, post-OTP argument swap) — on both channels and reports intent / tool /
 authorization / grounding / safety accuracy and latency. It is also exposed at `POST /evaluation/runs`.
 
+The orchestration suites (`tests/unit/test_execution_engine.py`, `tests/integration/test_orchestration.py`) cover DAG
+scheduling, plan policy, parallel reads, financial non-concurrency, confirmation amendments, read-timeout retry,
+transfer timeout → verification (no resend), lost-before-commit, unverifiable outcome → human, bank-side idempotency,
+worker crash → reconciliation on another worker, 100 concurrent sessions, 10 concurrent requests on one session and
+a three-worker simulation. `tests/integration/test_telephony.py` covers phone calls: per-call sessions for three
+simultaneous callers on one number, caller-id never authenticating, no raw numbers persisted, hangup never cancelling
+a submitted transfer, "wait!" after submission, barge-in outcome reporting and capacity limits. The mock bank supports fault injection for these (`POST /_admin/faults`).
+
+## Horizontal scaling
+
+Run as many backend workers as needed behind a load balancer; every turn state lives in Redis (session state, renewed
+per-session locks, versioned saves) and Postgres (durable workflows, audit). Production refuses to start without Redis.
+In-process concurrency limits are per worker; enable `DISTRIBUTED_TOOL_LIMITS` for cluster-wide limits per
+institution API. Details and settings: [docs/orchestration.md](docs/orchestration.md).
+
 ## API
 
 | | |
 |---|---|
 | Auth & tenancy | `POST /auth/login`, `POST /tenants`, `GET /tenants/me`, `POST/GET /users`, `POST/GET /agents`, `GET/PATCH /agents/{id}` |
 | Sessions | `POST /sessions` (optional bank-IdP `customer_assertion`), `GET /sessions/{id}`, `POST /sessions/{id}/auth/{assertion,identify,otp/send,otp/verify}`, `POST /sessions/{id}/close`, `GET /sessions/{id}/messages` |
-| Chat | `POST /chat/message`, `WS /ws/chat/{session_id}?token=` (streams `message.delta`, `tool.started`, `tool.completed`, `auth.required`, `confirmation.required`, `handoff.initiated`, `message.completed`, ...) |
+| Chat | `POST /chat/message`, `WS /ws/chat/{session_id}?token=` (streams `message.delta`, `tool.started`, `tool.completed`, `workflow.progress`, `verification.completed`, `auth.required`, `confirmation.required`, `handoff.initiated`, `message.completed`, ...) |
 | Voice | `POST /voice/session` (new, or switch an existing session to voice), `POST /voice/token`, `POST /voice/simulate` (dev) |
 | Knowledge | `POST /documents` (versioned upload), `GET /documents`, `POST /documents/{id}/reindex`, `POST /knowledge/search` |
 | Integrations & tools | `POST/GET /integrations`, `POST /integrations/{id}/test`, `POST /integrations/{id}/import-openapi`, `POST/GET /mcp/servers`, `GET /mcp/servers/{id}/tools`, `POST /mcp/servers/{id}/discover`, `GET /tools`, `PATCH /tools/{id}`, `POST /tools/{id}/test` |
@@ -117,13 +140,15 @@ tell a customer "no amount was debited" for the first two.
 ```
 app/
   agents/        runtime (channel-agnostic facade), orchestrator (turn loop), planner (intent), tool_selector,
-                 state (shared session model), prompts (system prompt + deterministic security prompts)
+                 state (shared session model), prompts (system prompt + deterministic security prompts),
+                 execution/ (planner DAG, executor, verifier, concurrency limits + capacity pools, durable workflows, templates)
   channels/      base (InteractionChannel, TurnRunner), chat/ (REST gateway, WebSocket), voice/ (LiveKit worker,
-                 voice sessions + tokens, STT/TTS selection, VAD/turn detection, SIP telephony)
+                 call lifecycle + tokens, STT/TTS selection, VAD/turn detection, LiveKit SIP / phone numbers)
   llm/           LLMProvider contract, OpenAI-compatible, local, resilient wrapper, rule-based stand-in, factory
   knowledge/     ingestion (parser, chunker, metadata, pipeline), embeddings, retrieval (Elasticsearch, in-memory,
                  hybrid RRF, rerankers), rag, citations, documents (versioning)
-  tools/         schemas (the one Tool contract), registry, router (Tool Gateway), permissions, rest/, mcp/, adapters/
+  tools/         schemas (the one Tool contract + trusted execution metadata), registry, router (Tool Gateway),
+                 failures (failure taxonomy + retry rules), permissions, rest/, mcp/, adapters/
   policies/      engine, rules (tenant DSL + defaults), risk (contextual scoring), approval (action binding, maker-checker)
   auth/          staff + customer authentication, RBAC, JWT, OAuth2 client credentials
   sessions/      session manager (Redis/in-memory store, per-session locks), conversation memory
@@ -135,9 +160,9 @@ app/
   observability/ OpenTelemetry tracing, Prometheus metrics, PII-safe JSON logging
   evaluation/    scenarios, runner, metrics
 mock_bank/       sandbox institution: REST + OpenAPI (accounts, loans, payments, OTP) and an MCP server (cards, transfers)
-scripts/         seed, demo, run_evaluation, load_test, generate_sample_docs
-migrations/      Alembic (initial schema)
-docs/            architecture, security, integrations, voice
+scripts/         seed, demo, run_evaluation, load_test, generate_sample_docs, provision_telephony
+migrations/      Alembic (initial schema; orchestration: tool execution metadata, agent_workflows; voice_calls)
+docs/            architecture, orchestration, security, integrations, voice
 ```
 
 ## Status and known limitations
@@ -156,4 +181,7 @@ This is a working prototype, verified end-to-end against PostgreSQL, Redis, Elas
 * Voice metrics are recorded in the LiveKit worker's job processes but not yet exported (needs Prometheus
   multiprocess mode or an OTLP metrics exporter); chat/common metrics are served at `/metrics`.
 * No rate limiting on the public `POST /sessions` / chat endpoints — put an API gateway / WAF in front.
+* Orchestration: workflow templates are code-defined (transfer, card block); other mutating tools are verified only by
+  their response and escalate when it is ambiguous. In-process concurrency limits are per worker (cluster-wide limits
+  cover concurrency groups only, opt-in). See [docs/orchestration.md](docs/orchestration.md#14-known-limitations).
 * Elasticsearch runs without security in the dev compose file; enable TLS + auth for any shared environment.

@@ -62,6 +62,15 @@ AFFIRM = _rx(
     r"^\s*(हाँ|हां|जी|ठीक है)",
 )
 NEGATE = _rx(r"^\s*(no|nope|nah|cancel|stop|don'?t|do not|nahi|nahin|mat karo|ruk(o|iye)|rehne do)\b", r"^\s*(नहीं|ना|रद्द)")
+# "Wait!" / "stop!" barged in after an action may already have been sent
+STOP = _rx(r"^\s*(wait|hold on|hang on|stop|cancel|no+|don'?t|ruk(o|iye| jao)?|ek (minute|min)|mat karo|band karo|rehne do)\b",
+           r"^\s*(रुको|रुकिए|रुक जाओ|नहीं|मत करो)")
+
+# Words that turn a "yes" into a modification ("yes, but make it ₹50,000", "haan lekin Rohan ko").
+AMEND = _rx(
+    r"\b(but|instead|change|make it|actually|only|except|however|rather|different|another|other|modify|update|correct|wrong|more|less)\b",
+    r"\b(lekin|magar|balki|badal|badlo|nahi balki)\b", r"लेकिन|मगर|बदल",
+)
 
 _AMOUNT = re.compile(
     r"(?:₹|rs\.?|inr|rupees?)\s?(\d[\d,]*(?:\.\d+)?)\s*(lakh|lakhs|lac|crore|cr|k|thousand|hazaar)?"
@@ -129,3 +138,20 @@ def rule_classify(text: str) -> tuple[str, float, dict[str, Any]]:
     if DATA_NOUNS.search(t) and re.search(r"\?|\bkitna|\bwhat|\bhow much|\bshow|\btell", t, _I):
         return "KNOWLEDGE_QUERY", 0.55, entities
     return "GENERAL_CONVERSATION", 0.6, entities
+
+
+def confirmation_reply(text: str) -> str:
+    """Classify a reply to "please confirm X": affirm | negate | amend | unclear | other.
+
+    Only a short, unconditional yes is `affirm`. Any amount, number, payee or modifier makes it `amend`: the frozen
+    action is dropped and the message is processed as a new request (which needs its own confirmation).
+    """
+    t = (text or "").strip()
+    amended = bool(re.search(r"\d", t)) or extract_amount(t) is not None or bool(AMEND.search(t)) or extract_payee(t) is not None
+    if amended:
+        return "amend"
+    if NEGATE.search(t):
+        return "negate"
+    if AFFIRM.search(t):
+        return "affirm" if len(t.split()) <= 6 else "unclear"
+    return "other"

@@ -29,7 +29,8 @@ async def test_complete_parses_tool_calls_and_sends_tools():
 
     r = await provider(handler).complete([LLMMessage(role="user", content="loan?")], tools=TOOLS)
     assert r.tool_calls[0].name == "get_loan_details" and r.usage.prompt_tokens == 10
-    assert seen["tools"][0]["function"]["name"] == "get_loan_details" and seen["parallel_tool_calls"] is False
+    # multiple calls per turn are allowed: the execution engine schedules them (config: LLM_PARALLEL_TOOL_CALLS)
+    assert seen["tools"][0]["function"]["name"] == "get_loan_details" and seen["parallel_tool_calls"] is True
 
 
 async def test_stream_assembles_fragmented_tool_call_and_suppresses_narration():

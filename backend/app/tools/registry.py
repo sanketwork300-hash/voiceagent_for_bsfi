@@ -11,9 +11,18 @@ from sqlalchemy import select
 from app.database.models import APITool, Integration, MCPServer, MCPTool
 from app.database.session import Database
 from app.domain import AuthState, Intent, RiskLevel
-from app.tools.schemas import ToolContext, ToolDefinition, ToolSource
+from app.tools.schemas import (
+    ExecutionMetadata,
+    OperationType,
+    SideEffect,
+    ToolContext,
+    ToolDefinition,
+    ToolSource,
+    resolve_execution,
+)
 
 BuiltinHandler = Callable[[dict[str, Any], ToolContext], Awaitable[Any]]
+ToolsHook = Callable[[dict[str, ToolDefinition]], None]
 
 SEARCH_KNOWLEDGE = ToolDefinition(
     name="search_knowledge",
@@ -25,6 +34,8 @@ SEARCH_KNOWLEDGE = ToolDefinition(
         "product": {"type": "string", "description": "Optional product filter, e.g. home_loan, credit_card, savings_account"},
     }, "required": ["query"]},
     risk_level=RiskLevel.LOW, min_auth_state=AuthState.UNAUTHENTICATED, source=ToolSource.BUILTIN,
+    execution=ExecutionMetadata(operation_type=OperationType.READ, side_effect=SideEffect.NONE, parallel_safe=True,
+                                idempotent=True, concurrency_group="knowledge"),
     intents=[Intent.KNOWLEDGE_QUERY, Intent.GENERAL_CONVERSATION, Intent.CUSTOMER_DATA_QUERY, Intent.ACTION_REQUEST],
 )
 REQUEST_HANDOFF = ToolDefinition(
@@ -35,6 +46,9 @@ REQUEST_HANDOFF = ToolDefinition(
         "note": {"type": "string", "description": "One-line context for the human agent"},
     }, "required": ["reason"]},
     risk_level=RiskLevel.LOW, min_auth_state=AuthState.UNAUTHENTICATED, source=ToolSource.BUILTIN,
+    # The handler only acknowledges; the runtime starts the handoff after the plan's other steps have run.
+    execution=ExecutionMetadata(operation_type=OperationType.READ, side_effect=SideEffect.NONE, parallel_safe=True,
+                                idempotent=True),
 )
 
 
@@ -44,6 +58,11 @@ class ToolRegistry:
         self._builtins: dict[str, tuple[ToolDefinition, BuiltinHandler]] = {}
         self._cache: dict[str, tuple[float, dict[str, ToolDefinition]]] = {}
         self._ttl = cache_ttl_seconds
+        self._hooks: list[ToolsHook] = []
+
+    def add_hook(self, hook: ToolsHook) -> None:
+        """Post-load hook, e.g. workflow templates marking workflow-bound parameters."""
+        self._hooks.append(hook)
 
     def register_builtin(self, tool: ToolDefinition, handler: BuiltinHandler) -> None:
         self._builtins[tool.name] = (tool, handler)
@@ -83,6 +102,8 @@ class ToolRegistry:
                 injected_params=row.injected_params, intents=[Intent(i) for i in row.intents],
                 confirmation_template=row.confirmation_template, timeout_seconds=row.timeout_seconds,
                 idempotent=row.idempotent, internal=row.internal, enabled=row.is_enabled,
+                execution=resolve_execution(source=ToolSource.REST, binding={"method": row.method}, idempotent=row.idempotent,
+                                            internal=row.internal, declared=row.execution, default_group=row.integration_id),
             )
         for row in mcp_rows:
             tools[row.name] = ToolDefinition(
@@ -93,7 +114,15 @@ class ToolRegistry:
                 injected_params=row.injected_params, intents=[Intent(i) for i in row.intents],
                 confirmation_template=row.confirmation_template, timeout_seconds=row.timeout_seconds,
                 internal=row.internal, enabled=row.is_enabled,
+                idempotent=bool((row.execution or {}).get("idempotent", False)),
+                execution=resolve_execution(source=ToolSource.MCP, binding={}, idempotent=False, internal=row.internal,
+                                            declared=row.execution, read_hint=bool((row.annotations or {}).get("readOnlyHint")),
+                                            default_group=row.server_id),
             )
+        # Built-ins are shared objects; hooks may annotate them, so hand out per-tenant copies.
+        tools = {n: (t.model_copy(deep=True) if t.source == ToolSource.BUILTIN else t) for n, t in tools.items()}
+        for hook in self._hooks:
+            hook(tools)
         self._cache[tenant_id] = (time.monotonic(), tools)
         return tools
 

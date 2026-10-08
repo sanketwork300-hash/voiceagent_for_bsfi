@@ -14,7 +14,8 @@ ALWAYS = {"request_human_handoff"}
 
 
 def _is_action(t: ToolDefinition) -> bool:
-    return t.requires_confirmation or t.risk_level.level >= RiskLevel.HIGH.level
+    # any state-changing tool counts, even if mis-registered as low risk without confirmation
+    return t.requires_confirmation or t.risk_level.level >= RiskLevel.HIGH.level or t.exec.mutates
 
 
 def select_tools(tools: dict[str, ToolDefinition], *, intent: Intent, agent_allowlist: list[str] | None) -> dict[str, ToolDefinition]:

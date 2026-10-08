@@ -14,6 +14,8 @@ export interface ToolStep {
   policyDecision?: string | null;
   error?: string | null;
   result?: unknown; // already masked by the backend gateway; rendered only in operator views
+  parallelGroup?: number; // execution wave: steps with the same number ran concurrently
+  verification?: string | null; // SUCCESS | FAILED | PARTIAL | UNKNOWN | TIMEOUT (account changes only)
 }
 
 export type Slip =
@@ -157,8 +159,15 @@ function applyFrame(state: ConversationState, f: BackendFrame, at: string): Conv
     case "tool.started":
       return updateLastAgent(ensureAgent(state, at), (m) => ({
         ...m, statusLabel: toolLabel(f.tool),
-        tools: [...m.tools, { id: nid("t"), tool: f.tool, status: "running", latencyMs: null }],
+        tools: [...m.tools, { id: nid("t"), tool: f.tool, status: "running", latencyMs: null, parallelGroup: f.data?.parallel_group }],
       }));
+    case "workflow.progress":
+      // only the label changes: an acknowledgement is not a result, so no slip or receipt is created here
+      return f.content ? updateLastAgent(ensureAgent(state, at), (m) => ({ ...m, statusLabel: f.content ?? m.statusLabel })) : state;
+    case "verification.completed":
+      return f.tool
+        ? updateLastAgent(state, (m) => ({ ...m, tools: markVerification(m.tools, f.tool as string, f.data.status) }))
+        : state;
     case "tool.completed":
       return updateLastAgent(state, (m) => {
         const tools = markTool(m.tools, f.tool, { status: "completed", latencyMs: f.data.latency_ms, source: f.data.source, riskLevel: f.data.risk_level, result: f.data.result });
@@ -227,6 +236,14 @@ function applyFrame(state: ConversationState, f: BackendFrame, at: string): Conv
     default:
       return state;
   }
+}
+
+function markVerification(tools: ToolStep[], tool: string, status: string | null): ToolStep[] {
+  const idx = tools.map((t) => t.tool === tool).lastIndexOf(true);
+  if (idx < 0) return tools;
+  const out = tools.slice();
+  out[idx] = { ...out[idx], verification: status };
+  return out;
 }
 
 function markTool(tools: ToolStep[], tool: string, patch: Partial<ToolStep>): ToolStep[] {

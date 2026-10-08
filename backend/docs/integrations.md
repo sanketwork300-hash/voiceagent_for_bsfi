@@ -21,7 +21,20 @@ x-bfsi-intents: [ACTION_REQUEST]
 x-bfsi-confirmation-template: "transfer {amount_inr} to {payee_name}"
 x-bfsi-internal: true                       # platform-only (OTP send/verify, customer lookup)
 x-bfsi-tool: false                          # don't expose this operation
+# scheduling (docs/orchestration.md) — merged conservatively: a POST can never become a parallel read
+x-bfsi-operation-type: WRITE                # READ | WRITE | VERIFY
+x-bfsi-side-effect: FINANCIAL_MUTATION      # NONE | ACCOUNT_READ | ACCOUNT_MUTATION | FINANCIAL_MUTATION | EXTERNAL_SIDE_EFFECT
+x-bfsi-parallel-safe: false                 # reads only; mutations are always serialized
+x-bfsi-idempotent: true                     # the API de-duplicates by Idempotency-Key
+x-bfsi-concurrency-group: banking_api       # shared rate-limit bucket (TOOL_GROUP_LIMITS)
+x-bfsi-depends-on: [find_beneficiary]       # must complete first when both are in one plan
+x-bfsi-max-concurrency: 8                   # per-tool cap (per worker)
 ```
+
+**Idempotency contract.** Every write carries a deterministic key — REST header `Idempotency-Key`, MCP
+`params._meta.idempotency_key` — stable for one workflow step and exact action. The institution should return the
+original result for a repeated key. For financial writes also expose a read-only status lookup by that key (the mock
+bank's `get_transfer_status`, `x-bfsi-internal`), which the platform uses to verify ambiguous outcomes instead of retrying.
 
 Authentication hooks the platform expects (mark `x-bfsi-internal: true`): `lookup_customer` (phone/ref →
 `customer_id`, `phone_masked`), `send_otp` (→ `challenge_id`, `destination_masked`), `verify_otp`
@@ -32,7 +45,9 @@ Authentication hooks the platform expects (mark `x-bfsi-internal: true`): `looku
 `POST /mcp/servers` (`url` for Streamable HTTP, or `transport=stdio` + `command`; `integration_id` supplies
 headers/credentials). Tools are discovered with `tools/list`; governance comes from MCP annotations
 (`readOnlyHint`, `destructiveHint`) and optional `_meta.bfsi` (`risk_level`, `min_auth_state`,
-`requires_confirmation`, `injected_params`, `intents`, `confirmation_template`). A server cannot declare its
+`requires_confirmation`, `injected_params`, `intents`, `confirmation_template`, `internal`, and `execution` with the
+scheduling fields above, e.g. `{"operation_type": "WRITE", "side_effect": "FINANCIAL_MUTATION", "idempotent": true,
+"concurrency_group": "banking_api"}`). A server cannot declare its
 own tools below MEDIUM risk. Re-discover with `POST /mcp/servers/{id}/discover` (admin governance edits are kept).
 
 ## Custom adapters

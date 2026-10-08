@@ -60,3 +60,15 @@ async def test_tenant_repository_scopes_every_query(container, tenant):
         assert await TenantRepository(s, Agent, "other-tenant").get(mine[0].id) is None
         with pytest.raises(TenantIsolationError):
             await TenantRepository(s, Agent, "other-tenant").add(Agent(name="x", tenant_id=tenant.id))
+
+
+def test_openapi_import_execution_metadata_and_credential_headers():
+    spec = {"openapi": "3.0.0", "paths": {"/v1/pay": {"post": {
+        "operationId": "pay", "x-bfsi-operation-type": "READ", "x-bfsi-parallel-safe": True,  # a POST cannot be a read
+        "x-bfsi-side-effect": "FINANCIAL_MUTATION", "x-bfsi-idempotent": True, "x-bfsi-concurrency-group": "core",
+        "parameters": [{"name": "X-API-Key", "in": "header", "schema": {"type": "string"}},
+                       {"name": "X-Channel-Ref", "in": "header", "schema": {"type": "string"}}]}}}}
+    t = import_openapi(spec, integration_id="i1")[0]
+    assert t.exec.operation_type.value == "WRITE" and not t.exec.parallel_safe and t.exec.side_effect.value == "FINANCIAL_MUTATION"
+    assert t.exec.idempotent and t.exec.concurrency_group == "core"
+    assert "X-API-Key" not in t.llm_schema()["properties"] and "X-Channel-Ref" in t.llm_schema()["properties"]

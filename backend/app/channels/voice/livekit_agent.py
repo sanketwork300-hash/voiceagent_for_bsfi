@@ -5,8 +5,14 @@
 LiveKit owns the real-time media concerns (VAD, endpointing, barge-in, partial transcripts, TTS playback).
 The "LLM" node handed to LiveKit is `RuntimeLLM`, a thin adapter that forwards the final user transcript
 to the very same AgentRuntime the chat API uses — so intent, RAG, tools, policy, auth and handoff logic
-are identical across channels. On barge-in LiveKit cancels the stream; the runtime then persists the
-partial answer as interrupted.
+are identical across channels. On barge-in LiveKit stops the TTS and cancels the stream; the runtime persists
+the partial answer as interrupted, while an account change already on its way to the bank is shielded (never
+cancelled) and its outcome is reported on the next turn.
+
+Phone calls arrive through a LiveKit phone number (or a carrier SIP trunk) and a dispatch rule that creates one room
+per caller; `VoiceSessionService` admits the call (capacity), binds it to a new session and ends it cleanly.
+Each job (= one call) runs in its own process owned by this worker for the call's lifetime (LiveKit dispatch gives
+the affinity); session/workflow state lives in Redis/Postgres, so the HTTP API can run on separate workers.
 
 Run:  python -m app.channels.voice.livekit_agent dev        (or `start` in production)
       python -m app.channels.voice.livekit_agent download-files   (turn-detector / VAD model weights)
@@ -18,7 +24,6 @@ import asyncio
 import json
 import logging
 import re
-import time
 from typing import Any
 
 from livekit import rtc
@@ -39,16 +44,12 @@ from livekit.agents import (
 
 from app.channels.base import build_request
 from app.channels.voice.audio import create_stt, create_tts, speech_text
-from app.channels.voice.telephony import (
-    TelephonyService,
-    sip_caller_number,
-    sip_dialed_number,
-    tenant_for_dialed_number,
-)
+from app.channels.voice.session import CallRejected, VoiceCallSession
+from app.channels.voice.telephony import ATTR_CALL_STATUS, InboundCall, TelephonyService
 from app.channels.voice.vad import load_vad, turn_handling
 from app.config import get_settings
 from app.container import Container
-from app.domain import AuthMethod, Channel, OutputModality
+from app.domain import Channel, OutputModality
 from app.escalation.handoff import voice_control_channel
 from app.observability import metrics
 from app.observability.logging import setup_logging
@@ -57,6 +58,11 @@ from app.observability.tracing import setup_tracing
 log = logging.getLogger("bfsi.voice")
 _SENTENCE_END = re.compile(r"([.!?।]+[\"')\]]*\s+|\n+)")
 FILLERS = {"en": "One moment.", "hi-Latn": "Ek moment.", "hi": "एक क्षण।"}
+BUSY = {
+    "en": "Sorry, all our lines are busy right now. Please call again in a few minutes. Goodbye.",
+    "hi-Latn": "Maaf kijiye, abhi sabhi lines vyast hain. Kripya kuch minute baad dobara call kijiye. Dhanyavaad.",
+    "hi": "क्षमा करें, अभी सभी लाइनें व्यस्त हैं। कृपया कुछ मिनट बाद फिर से कॉल करें। धन्यवाद।",
+}
 GREETINGS = {
     "en": "Hello! You're speaking with {agent} from {bank}. How can I help you today?",
     "hi-Latn": "Namaste! Main {bank} se {agent} bol raha hoon. Bataiye, main aapki kya madad kar sakta hoon?",
@@ -149,6 +155,11 @@ class RuntimeLLMStream(llm.LLMStream):
                         sentence, buf = buf[: m.end()], buf[m.end():]
                         self._push(req.request_id, speech_text(sentence, call.language) + " ")
                         spoken_any = True
+                elif ev.type == "workflow.progress" and ev.content and not spoken_any:
+                    # deterministic, neutral acknowledgement during slow work ("processing", "still checking") —
+                    # never a claim of success; that is only spoken from the verified result
+                    self._push(req.request_id, speech_text(ev.content, call.language) + " ")
+                    filler_sent = True
                 elif ev.type == "tool.started" and not spoken_any and not filler_sent:
                     self._push(req.request_id, FILLERS.get(call.language_tag, FILLERS["en"]) + " ")
                     filler_sent = True
@@ -176,26 +187,56 @@ def prewarm(proc: JobProcess) -> None:
     proc.userdata["vad"] = load_vad()
 
 
-async def _bootstrap_session(ctx: JobContext, c: Container) -> tuple[str, str, rtc.RemoteParticipant | None]:
-    meta = json.loads(ctx.job.metadata or "{}")
-    if meta.get("session_id") and meta.get("tenant_id"):
-        await c.sessions.attach_channel(meta["session_id"], meta["tenant_id"], Channel.VOICE)
-        return meta["session_id"], meta["tenant_id"], None
-    # Inbound phone call (SIP dispatch rule): resolve institution by dialled number, identify by caller id.
-    participant = await ctx.wait_for_participant()
-    attrs = dict(participant.attributes)
-    tenant = await tenant_for_dialed_number(c.db, sip_dialed_number(attrs))
-    if tenant is None:
-        raise RuntimeError("no tenant configured for dialled number")
-    state = await c.sessions.create(tenant_id=tenant.id, channel=Channel.VOICE, language=tenant.default_language)
-    if caller := sip_caller_number(attrs):
-        async with c.sessions.locked(state.session_id, tenant.id) as st:
-            # Caller-id only IDENTIFIES the customer; it is never treated as authentication.
-            await c.customer_auth.identify(st, phone=re.sub(r"\D", "", caller)[-10:], method=AuthMethod.CALLER_ID)
-    return state.session_id, tenant.id, participant
+async def _bootstrap_call(ctx: JobContext, c: Container) -> tuple[VoiceCallSession, rtc.RemoteParticipant | None]:
+    """Admit the call and bind it to a session. Raises CallRejected (capacity / unknown number)."""
+    admission = await c.voice.admit()
+    try:
+        meta = json.loads(ctx.job.metadata or "{}")
+        if meta.get("session_id") and meta.get("tenant_id"):  # in-app call: token minted for an existing session
+            call = await c.voice.start_app_call(meta["session_id"], meta["tenant_id"], room_name=ctx.room.name,
+                                                participant_identity=f"customer-{meta['session_id']}", admission=admission)
+            return call, None
+        # Phone call via the SIP dispatch rule: one new room and one new session per caller
+        participant = await ctx.wait_for_participant()
+        inbound = InboundCall.from_participant(ctx.room.name, participant.identity, dict(participant.attributes))
+        return await c.voice.start_inbound_call(inbound, admission), participant
+    except BaseException:
+        await c.voice.release(admission)
+        raise
 
 
-server = AgentServer(setup_fnc=prewarm)
+async def _reject_call(ctx: JobContext, c: Container, reason: str) -> None:
+    """Graceful overflow: transfer to a human queue if configured, else a short message, then hang up."""
+    settings = c.settings
+    log.warning("call rejected", extra={"reason": reason})
+    try:
+        participant = await asyncio.wait_for(ctx.wait_for_participant(), timeout=5)
+    except TimeoutError:
+        participant = None
+    is_sip = participant is not None and participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+    if is_sip and settings.sip_overflow_transfer_uri and reason.startswith("capacity"):
+        if await TelephonyService(settings).transfer_to_human(room=ctx.room.name, participant_identity=participant.identity,
+                                                              transfer_to=settings.sip_overflow_transfer_uri):
+            return
+    try:
+        tts = create_tts(settings, "en", {})
+        session = AgentSession(tts=tts)
+        await session.start(agent=BFSIVoiceAgent(instructions="busy"), room=ctx.room)
+        await session.say(BUSY["en"], allow_interruptions=False)
+        await session.aclose()
+    except Exception:  # noqa: BLE001 - no TTS available: just end the call
+        log.warning("could not play the busy message")
+    if is_sip:
+        await TelephonyService(settings).hang_up(ctx.room.name)
+    ctx.shutdown(reason=reason)
+
+
+def _worker_load(server: AgentServer) -> float:
+    """MAX_AGENT_SESSIONS_PER_WORKER: LiveKit stops dispatching calls to a worker whose load reaches the threshold."""
+    return len(server.active_jobs) / max(1, get_settings().max_agent_sessions_per_worker)
+
+
+server = AgentServer(setup_fnc=prewarm, load_fnc=_worker_load, load_threshold=1.0)
 
 
 @server.rtc_session(agent_name=get_settings().livekit_agent_name)
@@ -205,7 +246,13 @@ async def entrypoint(ctx: JobContext) -> None:
     setup_tracing(settings.otel_service_name + "-voice", settings.otel_exporter_otlp_endpoint, settings.otel_enabled)
     c = get_container()
     await ctx.connect()
-    session_id, tenant_id, sip_participant = await _bootstrap_session(ctx, c)
+    try:
+        voice_call, sip_participant = await _bootstrap_call(ctx, c)
+    except CallRejected as e:
+        await _reject_call(ctx, c, e.reason)
+        return
+    session_id, tenant_id = voice_call.session_id, voice_call.tenant_id
+    ctx.add_shutdown_callback(lambda: c.voice.end_call(voice_call, reason="session_ended"))  # idempotent safety net
     call = VoiceCallContext(c, session_id, tenant_id)
     state = await c.sessions.get(session_id, tenant_id)
     call.language, call.language_tag = state.language, state.response_language_tag
@@ -218,6 +265,7 @@ async def entrypoint(ctx: JobContext) -> None:
     except Exception as e:  # missing vendor key / plugin: fail the job loudly, keep the session usable on chat
         log.error("voice providers not configured (set STT_PROVIDER/TTS_PROVIDER and their API keys): %s", e,
                   extra={"session_id": session_id})
+        await c.voice.end_call(voice_call, status="failed", reason="voice_providers_not_configured")
         ctx.shutdown(reason="voice providers not configured")
         return
     session = AgentSession(stt=stt, tts=tts, vad=ctx.proc.userdata.get("vad") or load_vad(), llm=RuntimeLLM(call),
@@ -233,7 +281,6 @@ async def entrypoint(ctx: JobContext) -> None:
                 pass
 
     call.on_language_change = language_changed
-    started = time.time()
 
     @session.on("metrics_collected")
     def _on_metrics(ev: MetricsCollectedEvent) -> None:
@@ -256,6 +303,12 @@ async def entrypoint(ctx: JobContext) -> None:
         handle = ev.speech_handle
         handle.add_done_callback(lambda h: metrics.voice_interruptions.inc() if h.interrupted else None)
 
+    async def end(status: str, reason: str) -> None:
+        # stop media first: an in-progress turn is cancelled (a submitted transfer stays shielded) and releases the
+        # session, then the runtime does the end-of-call cleanup
+        await session.aclose()
+        await c.voice.end_call(voice_call, status=status, reason=reason)
+
     async def _voice_control() -> None:
         async for cmd in c.store.subscribe(voice_control_channel(session_id)):
             if cmd.get("type") != "transfer":
@@ -264,6 +317,8 @@ async def entrypoint(ctx: JobContext) -> None:
             if sip_participant is not None:
                 ok = await TelephonyService(settings).transfer_to_human(room=ctx.room.name, participant_identity=sip_participant.identity)
                 log.info("sip transfer", extra={"ok": ok, "handoff_id": cmd.get("handoff_id")})
+                if ok:
+                    await end("transferred", "transferred_to_human")
             else:  # WebRTC: a human agent joins this room from the desk using the handoff record
                 await ctx.room.local_participant.publish_data(json.dumps({"type": "handoff", "handoff_id": cmd.get("handoff_id")}),
                                                               topic="bfsi.events")
@@ -272,20 +327,26 @@ async def entrypoint(ctx: JobContext) -> None:
         await asyncio.sleep(settings.voice_max_call_seconds)
         await session.say("We've reached the maximum call duration. Thank you for calling. Goodbye!", allow_interruptions=False)
         await asyncio.sleep(3)
-        await session.aclose()
+        await end("completed", "max_duration")
+        if sip_participant is not None:
+            await TelephonyService(settings).hang_up(ctx.room.name)
 
     @ctx.room.on("participant_disconnected")
     def _on_left(p: rtc.RemoteParticipant) -> None:
+        if p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:  # a phone hangup is final: end now, no grace period
+            asyncio.create_task(end("completed", "caller_hangup"))
+            return
+
         async def grace() -> None:  # allow WebRTC reconnects before ending the call
             await asyncio.sleep(settings.voice_reconnect_grace_seconds)
             if not any(rp.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT for rp in ctx.room.remote_participants.values()):
-                await session.aclose()
+                await end("completed", "participant_left")
         asyncio.create_task(grace())
 
-    async def _on_shutdown() -> None:
-        metrics.call_duration.observe(time.time() - started)
-
-    ctx.add_shutdown_callback(_on_shutdown)
+    @ctx.room.on("participant_attributes_changed")
+    def _on_attrs(changed: dict[str, str], p: rtc.Participant) -> None:
+        if changed.get(ATTR_CALL_STATUS) == "hangup":
+            asyncio.create_task(end("completed", "caller_hangup"))
     control_task = asyncio.create_task(_voice_control())
     timeout_task = asyncio.create_task(_call_timeout())
     ctx.add_shutdown_callback(lambda: _cancel(control_task, timeout_task))

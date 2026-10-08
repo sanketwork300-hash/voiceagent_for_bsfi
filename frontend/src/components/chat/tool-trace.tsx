@@ -46,6 +46,8 @@ export function ToolTrace({ tools, audience }: { tools: ToolStep[]; audience: "c
               <dl className="grid grid-cols-[80px_1fr] gap-x-3 text-muted">
                 <dt>Status</dt><dd className="text-foreground">{t.status}{t.policyDecision && t.policyDecision !== "ALLOW" ? ` · ${t.policyDecision}` : ""}{t.outcome ? ` · ${t.outcome.replace("_", " ")}` : ""}</dd>
                 <dt>Latency</dt><dd className="font-mono">{formatMs(t.latencyMs)}</dd>
+                {t.parallelGroup != null && <><dt>Wave</dt><dd className="font-mono">{t.parallelGroup}{tools.filter((o) => o.parallelGroup === t.parallelGroup).length > 1 ? " · parallel" : ""}</dd></>}
+                {t.verification && <><dt>Verified</dt><dd className={t.verification === "SUCCESS" ? "text-success" : "text-warning"}>{t.verification.toLowerCase()}</dd></>}
                 {t.source && <><dt>Source</dt><dd>{SOURCE_LABEL[t.source] ?? t.source}</dd></>}
                 {t.error && <><dt>Error</dt><dd className="text-warning">{t.error}</dd></>}
               </dl>

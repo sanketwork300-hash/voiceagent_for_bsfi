@@ -55,9 +55,11 @@ class OpenAICompatibleProvider(LLMProvider):
         timeout: float = 30.0,
         temperature: float = 0.1,
         extra_headers: dict[str, str] | None = None,
+        parallel_tool_calls: bool = True,
     ) -> None:
         self.model = model
         self.temperature = temperature
+        self.parallel_tool_calls = parallel_tool_calls
         headers = {"Content-Type": "application/json", **(extra_headers or {})}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -75,7 +77,9 @@ class OpenAICompatibleProvider(LLMProvider):
         if tools:
             body["tools"] = [{"type": "function", "function": t.model_dump()} for t in tools]
             body["tool_choice"] = tool_choice or "auto"
-            body["parallel_tool_calls"] = False  # policy gating is simpler & safer one action at a time
+            # several calls per turn are fine: the execution engine (not the model) decides what runs in parallel,
+            # serializes mutations and policy-checks every step
+            body["parallel_tool_calls"] = self.parallel_tool_calls
         if json_schema:
             body["response_format"] = (
                 {"type": "json_schema", "json_schema": {"name": json_schema["name"], "schema": json_schema["schema"]}}

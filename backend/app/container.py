@@ -11,12 +11,16 @@ from typing import Any
 
 import httpx
 
+from app.agents.execution import ExecutionEngine
+from app.agents.execution.concurrency import SlotPool
+from app.agents.execution.templates import apply_bound_params
 from app.agents.orchestrator import Orchestrator
 from app.agents.planner import IntentClassifier, Planner
 from app.agents.runtime import AgentDirectory, AgentRuntime
 from app.auth.authentication import CustomerAuthService, StaffAuthService
 from app.auth.jwt import JWTService
 from app.auth.oauth import ClientCredentialsTokenProvider
+from app.channels.voice.session import VoiceSessionService
 from app.config import Settings
 from app.database.session import Database
 from app.escalation.handoff import HandoffService
@@ -56,7 +60,7 @@ from app.tools.adapters.base import AdapterToolExecutor
 from app.tools.mcp.client import MCPToolExecutor
 from app.tools.registry import REQUEST_HANDOFF, SEARCH_KNOWLEDGE, ToolRegistry
 from app.tools.rest.client import RestToolExecutor
-from app.tools.router import ToolGateway
+from app.tools.router import GatewayLimits, ToolGateway
 from app.tools.schemas import ToolContext, ToolSource
 
 log = logging.getLogger(__name__)
@@ -76,8 +80,11 @@ class Container:
         self.oauth = ClientCredentialsTokenProvider(transport=http_transport)
         self.credentials = CredentialManager(self.db, self.secret_box, self.oauth)
 
+        # Capacity pools (cluster-wide with Redis): LLM requests, active calls, STT/TTS streams
+        self.slots = SlotPool(self.store.redis if isinstance(self.store, RedisStateStore) else None, prefix="capacity")
+
         # LLM
-        self.llm = llm or create_llm_provider(s)
+        self.llm = llm or create_llm_provider(s, self.slots)
 
         # Knowledge
         self.embeddings = embeddings or (
@@ -102,6 +109,7 @@ class Container:
 
         # Tools, policy
         self.registry = ToolRegistry(self.db)
+        self.registry.add_hook(apply_bound_params)  # workflow-bound params are hidden from the LLM
         self.registry.register_builtin(SEARCH_KNOWLEDGE, self._search_knowledge)
         self.registry.register_builtin(REQUEST_HANDOFF, self._request_handoff)
         self.approvals = ApprovalService(self.db)
@@ -112,11 +120,15 @@ class Container:
             ToolSource.REST: self.rest_executor,
             ToolSource.MCP: self.mcp_executor,
             ToolSource.ADAPTER: AdapterToolExecutor(self.credentials),
-        })
+        }, GatewayLimits(default_tool_timeout=s.default_tool_timeout, read_retry_count=s.read_retry_count,
+                         write_retry_count=s.write_retry_count))
+        self.engine = ExecutionEngine(s, self.db, self.gateway,
+                                      redis_client=self.store.redis if isinstance(self.store, RedisStateStore) else None)
         self.integrations = IntegrationManager(self.db, self.credentials, self.registry, self.mcp_executor, http_transport)
 
         # Sessions, auth, escalation
-        self.sessions = SessionManager(self.db, self.store, s.session_idle_timeout_seconds)
+        self.sessions = SessionManager(self.db, self.store, s.session_idle_timeout_seconds, lock_ttl=s.session_lock_ttl,
+                                       lock_wait=s.session_lock_wait)
         self.memory = ConversationMemory(self.db, s.history_window_messages)
         self.staff_auth = StaffAuthService(self.db)
         self.customer_auth = CustomerAuthService(self.db, self.gateway, self.audit, s.customer_assertion_secret, s.max_auth_failures)
@@ -129,8 +141,10 @@ class Container:
         self.orchestrator = Orchestrator(
             settings=s, sessions=self.sessions, memory=self.memory, llm=self.llm, planner=self.planner,
             registry=self.registry, gateway=self.gateway, auth=self.customer_auth, handoff=self.handoff,
-            approvals=self.approvals, audit=self.audit, profiles=self.directory)
+            approvals=self.approvals, audit=self.audit, profiles=self.directory, engine=self.engine)
         self.runtime = AgentRuntime(self.orchestrator)
+        self.voice = VoiceSessionService(s, self.sessions, db=self.db, runtime=self.runtime, audit=self.audit,
+                                         slots=self.slots, auth=self.customer_auth)
 
     async def _search_knowledge(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         query = str(args.get("query", ""))[:500]

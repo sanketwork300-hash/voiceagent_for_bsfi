@@ -29,4 +29,21 @@ tts_latency = Histogram("bfsi_voice_tts_ttfb_seconds", "TTS time-to-first-byte",
 time_to_first_audio = Histogram("bfsi_voice_time_to_first_audio_seconds", "End of user speech -> first agent audio", buckets=_LAT, registry=REGISTRY)
 voice_interruptions = Counter("bfsi_voice_interruptions_total", "Barge-ins / interruptions", registry=REGISTRY)
 voice_turns = Counter("bfsi_voice_turns_total", "Voice turns", registry=REGISTRY)
+voice_calls = Counter("bfsi_voice_calls_total", "Voice call lifecycle (started/rejected/ended)", ["event", "detail"], registry=REGISTRY)
 call_duration = Histogram("bfsi_voice_call_duration_seconds", "Call duration", buckets=(10, 30, 60, 120, 300, 600, 1200, 1800), registry=REGISTRY)
+
+# --- orchestration / execution engine ---
+tool_execution_mode = Counter("bfsi_tool_execution_mode_total", "Tool steps by scheduling mode (parallel wave vs sequential)", ["mode"], registry=REGISTRY)
+tool_timeouts = Counter("bfsi_tool_timeouts_total", "Tool attempts that hit their timeout", ["tool"], registry=REGISTRY)
+tool_retries = Counter("bfsi_tool_retries_total", "Automatic tool retries", ["tool", "category"], registry=REGISTRY)
+tool_failures = Counter("bfsi_tool_failures_total", "Failed tool calls by category", ["tool", "category"], registry=REGISTRY)
+workflow_outcomes = Counter("bfsi_workflow_outcomes_total", "Workflows by terminal/hold status", ["workflow_type", "status"], registry=REGISTRY)
+workflow_latency = Histogram("bfsi_workflow_latency_seconds", "Workflow execution latency per turn (avg/p95 via histogram_quantile)",
+                             ["workflow_type"], buckets=_LAT, registry=REGISTRY)
+verification_outcomes = Counter("bfsi_verification_outcomes_total", "Post-execution verification results", ["tool", "status"], registry=REGISTRY)
+duplicate_prevented = Counter("bfsi_financial_duplicate_prevention_total", "Duplicate / unsafe mutation submissions prevented", ["reason"], registry=REGISTRY)
+policy_blocks = Counter("bfsi_policy_blocks_total", "Steps or plans blocked by policy", ["scope", "decision"], registry=REGISTRY)
+concurrency_limit_hits = Counter("bfsi_concurrency_limit_hits_total", "Tool steps that had to wait for a concurrency slot", ["scope"], registry=REGISTRY)
+session_lock_wait = Histogram("bfsi_session_lock_wait_seconds", "Time waiting for the per-session lock", buckets=_LAT, registry=REGISTRY)
+session_busy = Counter("bfsi_session_busy_total", "Turns rejected because the session stayed locked", registry=REGISTRY)
+session_state_conflicts = Counter("bfsi_session_state_conflicts_total", "Session saves rejected by version check (lost lock)", registry=REGISTRY)

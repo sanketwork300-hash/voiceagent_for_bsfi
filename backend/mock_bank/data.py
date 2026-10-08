@@ -74,15 +74,19 @@ _SEED = {
 
 DB: dict = {}
 OTP_CHALLENGES: dict[str, dict] = {}
-IDEMPOTENCY: dict[str, dict] = {}
+IDEMPOTENCY: dict[str, dict] = {}  # "<tool>:<idempotency key>" -> {"customer_id", "result"}
+FAULTS: dict[str, dict] = {}  # tool -> injected fault (sandbox testing)
 MOCK_OTP = "123456"  # deterministic in the sandbox; a real bank sends it by SMS
 
 
 def reset() -> None:
     DB.clear()
     DB.update(copy.deepcopy(_SEED))
+    DB["transfer_executions"] = 0
+    DB["duplicates_prevented"] = 0
     OTP_CHALLENGES.clear()
     IDEMPOTENCY.clear()
+    FAULTS.clear()
 
 
 def mask(number: str) -> str:

@@ -4,13 +4,15 @@
 # Web UI:         docker compose --profile ui up             (adds the Next.js frontend on :3000)
 x-backend-env: &backend-env
   env_file: [.env]
+  extra_hosts: ["host.docker.internal:host-gateway"]   # lets containers reach host services, e.g. a local Ollama
   environment:
     DATABASE_URL: postgresql+asyncpg://bfsi:bfsi@postgres:5432/bfsi
     REDIS_URL: redis://redis:6379/0
     ELASTICSEARCH_URL: http://elasticsearch:9200
     MOCK_BANK_URL: http://mock-bank:8100
-    LIVEKIT_URL: ws://livekit:7880                                   # in-network address for the worker / API
-    LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}   # what browsers/apps connect to
+    # LiveKit Cloud: set LIVEKIT_URL=wss://<project>.livekit.cloud in .env. Unset -> the bundled dev server (no phone numbers)
+    LIVEKIT_URL: ${LIVEKIT_URL:-ws://livekit:7880}
+    LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-${LIVEKIT_URL:-ws://localhost:7880}}   # what browsers/apps connect to
 
 services:
   postgres:

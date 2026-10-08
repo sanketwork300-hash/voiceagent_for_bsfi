@@ -9,7 +9,6 @@ from sqlalchemy import select
 
 from app.api.deps import container, load_session
 from app.auth.authorization import SessionPrincipal, current_session, session_from_token
-from app.channels.voice.session import VoiceSessionService
 from app.database.models import Tenant
 from app.domain import Channel
 
@@ -42,7 +41,7 @@ async def voice_session(body: VoiceSessionCreate, request: Request, c=Depends(co
         st = await c.sessions.create(tenant_id=tenant.id, channel=Channel.VOICE, language=body.language or tenant.default_language)
         session_id, tenant_id = st.session_id, tenant.id
         token = c.jwt.session_token(session_id=session_id, tenant_id=tenant_id, ttl=c.settings.session_token_ttl_seconds)
-    svc = VoiceSessionService(c.settings, c.sessions)
+    svc = c.voice
     state, room = await svc.start(session_id, tenant_id)
     return {"session": state.public_view(), "session_token": token, "room": room, "livekit_url": c.settings.livekit_public_url or c.settings.livekit_url,
             "participant_token": svc.customer_token(state, room)}
@@ -54,7 +53,7 @@ async def voice_token(p: SessionPrincipal = Depends(current_session), c=Depends(
     state = await load_session(c, p.session_id, p.tenant_id)
     if not state.voice_room:
         raise HTTPException(409, "no voice session started; call POST /voice/session first")
-    svc = VoiceSessionService(c.settings, c.sessions)
+    svc = c.voice
     return {"room": state.voice_room, "livekit_url": c.settings.livekit_public_url or c.settings.livekit_url, "participant_token": svc.customer_token(state, state.voice_room)}
 
 

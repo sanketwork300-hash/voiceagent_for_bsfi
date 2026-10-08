@@ -15,9 +15,19 @@ from app.database.session import Database
 from app.domain import new_id, utcnow
 
 
-def action_hash(tool: str, arguments: dict[str, Any]) -> str:
-    canonical = json.dumps({"tool": tool, "args": arguments}, sort_keys=True, default=str, separators=(",", ":"))
+def action_hash(tool: str, arguments: dict[str, Any], *, tenant_id: str | None = None, session_id: str | None = None,
+                customer_id: str | None = None) -> str:
+    """Identity of one concrete action: tool + exact arguments (amount, payee, beneficiary/account, currency ...)
+    + who it is for (tenant, session, customer). A confirmation, transaction OTP or approval granted for one hash
+    can never authorise a different amount, payee, customer or session."""
+    canonical = json.dumps({"tool": tool, "args": arguments, "tenant": tenant_id, "session": session_id, "customer": customer_id},
+                           sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def context_action_hash(tool: str, arguments: dict[str, Any], ctx: Any) -> str:
+    """`action_hash` bound to a ToolContext (tenant, session, customer)."""
+    return action_hash(tool, arguments, tenant_id=ctx.tenant_id, session_id=ctx.session_id, customer_id=ctx.customer_id)
 
 
 class ActionGrant(BaseModel):
@@ -34,10 +44,11 @@ class ApprovalService:
         self.ttl = timedelta(seconds=ttl_seconds)
 
     async def request(self, *, tenant_id: str, session_id: str, conversation_id: str, tool: str,
-                      arguments: dict[str, Any], risk_level: str, reason: str) -> ApprovalRequest:
+                      arguments: dict[str, Any], risk_level: str, reason: str, action_hash: str) -> ApprovalRequest:
+        """`action_hash` is the policy engine's context-bound hash; approval is checked against exactly it."""
         async with self.db.session() as s:
             req = ApprovalRequest(id=new_id(), tenant_id=tenant_id, session_id=session_id, conversation_id=conversation_id,
-                                  tool_name=tool, arguments=arguments, args_hash=action_hash(tool, arguments),
+                                  tool_name=tool, arguments=arguments, args_hash=action_hash,
                                   risk_level=risk_level, reason=reason)
             s.add(req)
         return req

@@ -68,6 +68,7 @@ class IntegrationManager:
                 row.method, row.path = t.binding["method"], t.binding["path"]
                 row.operation_id, row.parameter_map = t.binding.get("operation_id"), t.binding["parameter_map"]
                 row.idempotent, row.internal = t.idempotent, t.internal
+                row.execution = t.exec.model_dump(mode="json", exclude={"concurrency_group"} if t.exec.concurrency_group == integration_id else None)
                 if row.name not in existing:
                     s.add(row)
         self.registry.invalidate(tenant_id)

@@ -118,8 +118,13 @@ def _user_texts(messages: list[LLMMessage]) -> list[str]:
 
 
 def _call(name: str, args: dict[str, Any]) -> LLMResponse:
+    return _calls([(name, args)])
+
+
+def _calls(items: list[tuple[str, dict[str, Any]]]) -> LLMResponse:
+    """Several tool calls in one response (like parallel tool calling in real models); the platform schedules them."""
     return LLMResponse(
-        tool_calls=[LLMToolCall(id=f"call_{uuid.uuid4().hex[:12]}", name=name, arguments=args)],
+        tool_calls=[LLMToolCall(id=f"call_{uuid.uuid4().hex[:12]}", name=n, arguments=a) for n, a in items],
         finish_reason="tool_calls", provider="rule_based", model="rule-based-v1",
     )
 
@@ -187,7 +192,14 @@ class RuleBasedLLMProvider(LLMProvider):
             args = {"amount": ent.get("amount"), "payee_name": ent.get("payee_name"), "currency": "INR"}
             if args["amount"] is None or not args["payee_name"]:
                 return _text("Sure. How much would you like to transfer, and to which registered beneficiary?")
-            return _call("transfer_money", args)
+            reads = self._data_reads(text, tools)  # "check my balance and transfer ₹1,000 to Rahul"
+            return _calls([*reads, ("transfer_money", args)])
+        # amendment of an earlier transfer ("yes, but make it ₹50,000"): a NEW request, confirmed again by the platform
+        if "transfer_money" in tools and ent.get("amount") is not None and not lx.KNOWLEDGE_CUES.search(text):
+            earlier = next((u for u in reversed(users[:-1]) if lx.ACTION_TRANSFER.search(u)), None)
+            payee = ent.get("payee_name") or (lx.extract_payee(earlier) if earlier else None)
+            if earlier and payee:
+                return _call("transfer_money", {"amount": ent["amount"], "payee_name": payee, "currency": "INR"})
         if lx.ACTION_BLOCK.search(text) and lx.CARD.search(text):
             if ct := lx.card_type(text):
                 if r := offer("block_card", {"card_type": ct, "reason": "customer_request"}):
@@ -200,17 +212,8 @@ class RuleBasedLLMProvider(LLMProvider):
             args = {"payment_ref": ref} if (ref := lx.extract_payment_ref(text)) else {}
             if r := offer("get_payment_status", args):
                 return r
-        if intent in ("CUSTOMER_DATA_QUERY", "ACTION_REQUEST"):
-            if lx.CARD.search(text) or lx.OUTSTANDING.search(text):
-                args = {"card_type": ct} if (ct := lx.card_type(text)) else {}
-                if r := offer("get_card_status", args):
-                    return r
-            if lx.LOAN.search(text) and (r := offer("get_loan_details", {})):
-                return r
-            if lx.TRANSACTIONS.search(text) and (r := offer("get_recent_transactions", {"limit": 5})):
-                return r
-            if lx.BALANCE.search(text) and (r := offer("get_account_balance", {})):
-                return r
+        if intent in ("CUSTOMER_DATA_QUERY", "ACTION_REQUEST") and (reads := self._data_reads(text, tools)):
+            return _calls(reads)
         if lx.GREETING.search(text):
             return _text(t("greeting", lang))
         if lx.THANKS.search(text):
@@ -219,6 +222,24 @@ class RuleBasedLLMProvider(LLMProvider):
             if r := offer("search_knowledge", {"query": text}):
                 return r
         return _text(t("fallback", lang))
+
+    @staticmethod
+    def _data_reads(text: str, tools: set[str]) -> list[tuple[str, dict[str, Any]]]:
+        """Every independent lookup the message asks for ("balance and last transactions" -> two calls)."""
+        out: list[tuple[str, dict[str, Any]]] = []
+        card = bool(lx.CARD.search(text) or lx.OUTSTANDING.search(text))
+        loan = bool(lx.LOAN.search(text))
+        if card and "get_card_status" in tools:
+            out.append(("get_card_status", {"card_type": ct} if (ct := lx.card_type(text)) else {}))
+        if loan and "get_loan_details" in tools:
+            out.append(("get_loan_details", {}))
+        if lx.TRANSACTIONS.search(text) and "get_recent_transactions" in tools:
+            out.append(("get_recent_transactions", {"limit": 5}))
+        # "loan balance" / "card balance" is about the loan/card, not the savings account
+        account_words = re.search(r"\b(account|savings|khata|bank balance)\b", text, re.I)
+        if lx.BALANCE.search(text) and "get_account_balance" in tools and (account_words or not (card or loan)):
+            out.append(("get_account_balance", {}))
+        return out
 
     # ---- grounded response composition ----------------------------------------------------------
     def _compose_from_tools(self, messages: list[LLMMessage], lang: str) -> str:
@@ -236,6 +257,10 @@ class RuleBasedLLMProvider(LLMProvider):
         return " ".join(self._render(name, res, lang, query, users) for name, res in results).strip()
 
     def _render(self, name: str, res: dict[str, Any], lang: str, query: str, users: list[str]) -> str:
+        if res.get("status") == "HELD":
+            return ""  # the platform asks for verification / confirmation itself
+        if res.get("status") in ("REJECTED", "SKIPPED"):
+            return t("denied" if res.get("status") == "REJECTED" else "error", lang, error=res.get("error", ""))
         if not res.get("ok"):
             key = "denied" if res.get("policy_decision") == "DENY" else "error"
             return t(key, lang, error=res.get("error", "unknown error"))
@@ -290,6 +315,9 @@ class RuleBasedLLMProvider(LLMProvider):
                 return t("kb", lang, title=top.get("title", ""), answer=_best_sentences(top.get("snippet", ""), query))
             case "request_human_handoff":
                 return t("handoff", lang)
+            case "find_beneficiary":
+                names = ", ".join(f"{b.get('name')} ({b.get('account_number_masked')})" for b in d.get("beneficiaries", []))
+                return f"Registered beneficiaries: {names}." if names else t("error", lang, error="no matching beneficiary")
             case _:
                 return json.dumps(d)[:300]
 

@@ -16,7 +16,7 @@ from sqlalchemy import select
 from app.agents.orchestrator import AgentProfile, Orchestrator
 from app.database.models import Agent, Tenant
 from app.database.session import Database
-from app.domain import AgentRequest, AgentResponse, RuntimeEvent
+from app.domain import AgentRequest, AgentResponse, Channel, RuntimeEvent
 
 
 class AgentDirectory:
@@ -59,6 +59,10 @@ class AgentRuntime:
     def stream(self, request: AgentRequest) -> AsyncIterator[RuntimeEvent]:
         """Streaming turn. Cancelling the consumer (barge-in) persists the partial answer as interrupted."""
         return self.orchestrator.run(request)
+
+    async def end_channel(self, session_id: str, tenant_id: str, *, channel: Channel, close: bool, reason: str) -> dict:
+        """Channel ended (hangup / disconnect): safe cleanup, decided by the runtime (see Orchestrator.end_channel)."""
+        return await self.orchestrator.end_channel(session_id, tenant_id, channel=channel, close=close, reason=reason)
 
     async def process(self, request: AgentRequest) -> AgentResponse:
         response: AgentResponse | None = None

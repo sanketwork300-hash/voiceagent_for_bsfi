@@ -61,6 +61,9 @@ class _GovernedTool:
     timeout_seconds: Mapped[int] = mapped_column(Integer, default=10)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     internal: Mapped[bool] = mapped_column(Boolean, default=False)  # never exposed to the LLM (e.g. verify_otp)
+    # Declared scheduling metadata (operation_type, side_effect, parallel_safe, idempotent, concurrency_group ...).
+    # Merged conservatively by app.tools.schemas.resolve_execution; never taken from LLM output.
+    execution: Mapped[dict] = mapped_column(default=dict)
 
 
 class MCPTool(IdMixin, TimestampMixin, TenantScoped, _GovernedTool, Base):

@@ -16,7 +16,10 @@ PROTOCOL_VERSION = "2025-06-18"
 
 
 class MCPTransportError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, category: str = "NETWORK_ERROR", sent: bool | None = None) -> None:
+        super().__init__(message)
+        self.category = category  # app.tools.failures.FailureCategory value
+        self.sent = sent
 
 
 class MCPTransport(ABC):
@@ -58,10 +61,16 @@ class StreamableHTTPTransport(MCPTransport):
         msg = {"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}}
         try:
             r = await self._client.post(self.url, json=msg, headers=self._h(), timeout=timeout)
+        except httpx.ConnectError as e:
+            raise MCPTransportError(f"MCP server unreachable: {e}", sent=False) from e
+        except httpx.TimeoutException as e:
+            raise MCPTransportError("MCP server timed out", category="TIMEOUT") from e
         except httpx.HTTPError as e:
             raise MCPTransportError(f"MCP server unreachable: {e}") from e
         if r.status_code >= 400:
-            raise MCPTransportError(f"MCP HTTP {r.status_code}")
+            # 404 = MCP session expired / unknown: the call was not processed
+            raise MCPTransportError(f"MCP HTTP {r.status_code}", category="DEPENDENCY_UNAVAILABLE" if r.status_code >= 500 else "NETWORK_ERROR",
+                                    sent=False if r.status_code in (401, 404) else None)
         if sid := r.headers.get("mcp-session-id"):
             self.session_id = sid
         ctype = r.headers.get("content-type", "")
@@ -139,7 +148,7 @@ class StdioTransport(MCPTransport):
             return _unwrap(await asyncio.wait_for(fut, timeout))
         except TimeoutError as e:
             self._pending.pop(rid, None)
-            raise MCPTransportError(f"MCP stdio timeout on {method}") from e
+            raise MCPTransportError(f"MCP stdio timeout on {method}", category="TIMEOUT") from e
 
     async def notify(self, method, params=None):
         await self._send({"jsonrpc": "2.0", "method": method, "params": params or {}})
