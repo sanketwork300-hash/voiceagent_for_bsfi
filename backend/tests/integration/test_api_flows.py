@@ -193,3 +193,66 @@ async def test_policy_override_via_api(api):
 @pytest.mark.parametrize("path", ["/agents", "/documents", "/integrations", "/tools", "/policies", "/handoff/queue"])
 async def test_admin_endpoints_require_auth(api, path):
     assert (await api.get(path)).status_code == 401
+
+
+async def test_monitoring_and_mcp_listing(api):
+    sid, hdr = await customer_session(api)
+    await say(api, sid, hdr, "What is my loan balance?")
+    await say(api, sid, hdr, "I want to talk to a human agent")
+    admin = await staff_token(api)
+    summary = (await api.get("/monitoring/summary", headers=admin)).json()
+    assert summary["tools"]["completed"] >= 1 and summary["handoffs"]["total"] >= 1 and summary["series"]
+    assert any(r["tool"] == "get_loan_details" for r in summary["tools"]["by_tool"])
+    act = (await api.get("/monitoring/activity", headers=admin)).json()
+    assert {a["kind"] for a in act} >= {"tool", "handoff"}
+    servers = (await api.get("/mcp/servers", headers=admin)).json()
+    assert servers[0]["tool_count"] == 3 and servers[0]["name"] == "mock-bank-mcp"
+
+
+async def test_failure_outcome_reported(api, container):
+    import httpx
+
+    sid, hdr = await customer_session(api)
+
+    class Down(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            raise httpx.ConnectError("down")
+
+    container.rest_executor._client = httpx.AsyncClient(transport=Down())
+    r = await say(api, sid, hdr, "What is my loan balance?")
+    assert r["tool_calls"][0]["status"] == "failed"
+
+
+async def test_failure_kind_distinguishes_rejected_from_unknown(container, authed_session):
+    import httpx
+
+    from app.tools.schemas import ToolCallRequest
+
+    st = await authed_session()
+    ctx = container.orchestrator._ctx(st, type("R", (), {"channel": st.channel, "request_id": "r1"})())
+    tools = await container.registry.tools_for(st.tenant_id)
+    call = ToolCallRequest(id="c", name="get_payment_status", arguments={"payment_ref": "NOPE123"})
+    rejected = await container.gateway.execute(call, ctx, offered=tools)
+    assert not rejected.result.ok and rejected.result.failure_kind == "rejected"  # bank said 404: nothing processed
+
+    class Down(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            raise httpx.ReadTimeout("slow")
+
+    container.rest_executor._client = httpx.AsyncClient(transport=Down())
+    unknown = await container.gateway.execute(call, ctx, offered=tools)
+    assert unknown.result.failure_kind == "unknown"  # sent but unconfirmed: UI must not claim "not debited"
+
+
+async def test_agent_update(api):
+    hdr = await staff_token(api)
+    agent = (await api.get("/agents", headers=hdr)).json()[0]
+    r = await api.patch(f"/agents/{agent['id']}", headers=hdr, json={"allowed_tools": ["get_loan_details"], "voice_config": {"tts_provider": "sarvam"}})
+    assert r.status_code == 200 and r.json()["allowed_tools"] == ["get_loan_details"]
+    sid, chdr = await customer_session(api)
+    bal = await say(api, sid, chdr, "What is my account balance?")  # balance tool no longer allowed for this agent
+    assert not any(t["status"] == "completed" and t["name"] == "get_account_balance" for t in bal["tool_calls"])
+    r = await api.patch(f"/agents/{agent['id']}", headers=hdr, json={"clear_tool_restriction": True})
+    assert r.json()["allowed_tools"] is None
+    agent_user = await staff_token(api, "agent@demo-bank.example")
+    assert (await api.patch(f"/agents/{agent['id']}", headers=agent_user, json={"name": "x"})).status_code == 403

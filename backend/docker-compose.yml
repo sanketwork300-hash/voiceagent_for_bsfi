@@ -1,6 +1,7 @@
 # Development stack. `docker compose up` -> backend + mock bank + Postgres + Redis + Elasticsearch.
 # Voice:          docker compose --profile voice up         (adds LiveKit server + voice worker)
 # Observability:  docker compose --profile observability up (adds Jaeger; set OTEL_EXPORTER_OTLP_ENDPOINT)
+# Web UI:         docker compose --profile ui up             (adds the Next.js frontend on :3000)
 x-backend-env: &backend-env
   env_file: [.env]
   environment:
@@ -50,6 +51,23 @@ services:
       redis: {condition: service_healthy}
       elasticsearch: {condition: service_healthy}
       mock-bank: {condition: service_healthy}
+
+  frontend:
+    profiles: [ui]
+    build:
+      context: ../frontend
+      args:
+        NEXT_PUBLIC_BACKEND_WS_URL: ws://localhost:8000
+        NEXT_PUBLIC_LIVEKIT_URL: ws://localhost:7880
+        NEXT_PUBLIC_DEMO_MODE: "true"
+    environment:
+      BACKEND_URL: http://backend:8000          # server-side BFF -> backend (in-network)
+      DEMO_MODE: "true"
+      DEMO_TENANT: demo-bank
+      DEMO_CUSTOMER_ASSERTION_SECRET: ${CUSTOMER_ASSERTION_SECRET:-demo-bank-idp-shared-secret-32bytes!}
+    ports: ["3000:3000"]
+    depends_on:
+      backend: {condition: service_healthy}
 
   voice-agent:
     profiles: [voice]

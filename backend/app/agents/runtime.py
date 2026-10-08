@@ -46,6 +46,7 @@ class AgentDirectory:
             tenant_id=tenant_id, tenant_slug=tenant.slug, tenant_name=tenant.name, institution_type=tenant.institution_type,
             agent_id=agent.id if agent else None, agent_name=agent.name if agent else "Assistant",
             persona=agent.persona_prompt if agent else "", allowed_tools=agent.allowed_tools if agent else None,
+            voice_config=(agent.voice_config or {}) if agent else {},
         )
         self._cache[key] = (time.monotonic(), profile)
         return profile

@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import json
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -98,6 +98,11 @@ class ToolResult(BaseModel):
     error: str | None = None
     policy_decision: str | None = None
     latency_ms: float | None = None
+    # What is known about the institution-side effect of a failed call:
+    #   not_executed - never sent (unknown tool, invalid args, policy hold/deny)
+    #   rejected     - the institution explicitly declined it (4xx / tool error): nothing was processed
+    #   unknown      - sent but not confirmed (timeout, 5xx, transport error): outcome must be checked
+    failure_kind: Literal["not_executed", "rejected", "unknown"] | None = None
 
     def to_llm_content(self) -> str:
         body: dict[str, Any] = {"ok": self.ok}

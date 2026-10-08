@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from sqlalchemy import func, select
 
 from app.api.deps import container
 from app.auth.authorization import StaffPrincipal, require
 from app.auth.permissions import Permission
+from app.database.models import Integration, MCPServer, MCPTool
 
 router = APIRouter(prefix="/mcp", tags=["integrations"])
 
@@ -31,6 +33,20 @@ async def register_server(body: MCPServerCreate, p: StaffPrincipal = Depends(req
     await c.audit.record(p.tenant_id, "mcp.server_registered", actor_type="staff", actor_id=p.user_id, resource=server.id,
                          payload={"tools": [t.name for t in tools]})
     return {"id": server.id, "name": server.name, "tools": [_tool(t) for t in tools]}
+
+
+@router.get("/servers")
+async def list_servers(p: StaffPrincipal = Depends(require(Permission.INTEGRATION_MANAGE)), c=Depends(container)) -> list[dict]:
+    async with c.db.session() as s:
+        servers = (await s.execute(select(MCPServer).where(MCPServer.tenant_id == p.tenant_id))).scalars().all()
+        counts = dict((await s.execute(select(MCPTool.server_id, func.count()).where(MCPTool.tenant_id == p.tenant_id)
+                                       .group_by(MCPTool.server_id))).all())
+        integ = {i.id: i for i in (await s.execute(select(Integration).where(Integration.tenant_id == p.tenant_id))).scalars()}
+    return [{"id": x.id, "name": x.name, "transport": x.transport, "url": x.url, "integration_id": x.integration_id,
+             "auth_type": integ[x.integration_id].auth_type if x.integration_id in integ else "none",
+             "status": integ[x.integration_id].status if x.integration_id in integ else "unknown",
+             "protocol_version": x.protocol_version, "server_info": x.server_info, "tool_count": counts.get(x.id, 0),
+             "last_discovered_at": x.last_discovered_at, "is_enabled": x.is_enabled} for x in servers]
 
 
 @router.get("/servers/{server_id}/tools")

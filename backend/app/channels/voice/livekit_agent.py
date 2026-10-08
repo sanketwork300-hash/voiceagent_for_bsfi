@@ -210,7 +210,7 @@ async def entrypoint(ctx: JobContext) -> None:
     state = await c.sessions.get(session_id, tenant_id)
     call.language, call.language_tag = state.language, state.response_language_tag
     profile = await c.directory.get(tenant_id, state.agent_id)
-    voice_cfg: dict[str, Any] = {}
+    voice_cfg: dict[str, Any] = profile.voice_config  # per-agent STT/TTS provider and voices
 
     try:
         tts = create_tts(settings, call.language, voice_cfg)

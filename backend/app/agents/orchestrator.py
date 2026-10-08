@@ -74,6 +74,7 @@ class AgentProfile:
     agent_name: str
     persona: str
     allowed_tools: list[str] | None
+    voice_config: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -259,8 +260,10 @@ class Orchestrator:
                 state.policy_rejections += 1
             else:
                 state.consecutive_failures += 1
-            yield RuntimeEvent(type="tool.failed", tool=name, data={"error": outcome.result.error,
-                                                                    "policy_decision": outcome.result.policy_decision})
+            yield RuntimeEvent(type="tool.failed", tool=name, data={
+                "error": outcome.result.error, "policy_decision": outcome.result.policy_decision,
+                "outcome": outcome.result.failure_kind or "unknown", "latency_ms": outcome.result.latency_ms,
+                "source": outcome.tool.source.value if outcome.tool else None})
             if state.policy_rejections >= 2:
                 async for ev in self._start_handoff(state, turn, HandoffReason.POLICY_REJECTION):
                     yield ev
@@ -272,7 +275,10 @@ class Orchestrator:
         data = outcome.result.data
         turn.evidence.append(outcome.result.to_llm_content())
         state.remember_tool(name, True, _compact(data))
-        yield RuntimeEvent(type="tool.completed", tool=name, data={"latency_ms": outcome.result.latency_ms})
+        yield RuntimeEvent(type="tool.completed", tool=name, data={
+            "latency_ms": outcome.result.latency_ms, "source": outcome.tool.source.value if outcome.tool else None,
+            "risk_level": outcome.tool.risk_level.value if outcome.tool else None,
+            "result": data})  # already masked by the gateway (AUDIT profile)
         if name == "search_knowledge":
             sources = [SourceCitation.model_validate(r) for r in (data or {}).get("results", [])]
             turn.sources = sources
@@ -295,6 +301,7 @@ class Orchestrator:
         lang = state.response_language_tag
         prev = state.pending_action
         summary = _action_summary(tool, outcome.arguments)
+        details = redact_data(outcome.arguments, RedactionProfile.AUDIT)
         pa = PendingAction.create(
             self.settings.pending_action_ttl_seconds, tool=tool.name, arguments=outcome.arguments, action_hash=d.action_hash,
             decision=d.decision, reason=d.reason, risk_level=d.risk_level.value, summary=summary,
@@ -316,7 +323,8 @@ class Orchestrator:
             async for ev in self._say(turn, msg("confirm", lang, summary=summary)):
                 yield ev
             yield RuntimeEvent(type="confirmation.required", tool=tool.name,
-                               data={"action_id": pa.id, "summary": summary, "risk_level": pa.risk_level, "expires_at": pa.expires_at.isoformat()})
+                               data={"action_id": pa.id, "summary": summary, "risk_level": pa.risk_level, "details": details,
+                                     "expires_at": pa.expires_at.isoformat()})
         else:
             pa.expires_at = utcnow() + timedelta(seconds=APPROVAL_HOLD_SECONDS)  # checkers need longer than an OTP window
             if not pa.approval_id:
@@ -330,7 +338,9 @@ class Orchestrator:
                 text = msg("approval_waiting", lang, ref=pa.approval_id[:8].upper())
             async for ev in self._say(turn, text):
                 yield ev
-            yield RuntimeEvent(type="approval.required", tool=tool.name, data={"approval_id": pa.approval_id, "reason": d.reason})
+            yield RuntimeEvent(type="approval.required", tool=tool.name, data={"approval_id": pa.approval_id, "reason": d.reason,
+                                                                                "summary": summary, "details": details,
+                                                                                "risk_level": pa.risk_level})
 
     async def _send_otp(self, state: SessionState, turn: Turn, pa: PendingAction) -> AsyncIterator[RuntimeEvent]:
         lang = state.response_language_tag
@@ -352,7 +362,8 @@ class Orchestrator:
             yield ev
         yield RuntimeEvent(type="auth.required", tool=pa.tool, data={
             "step": "otp", "purpose": "transaction" if txn else "login", "destination": dest,
-            "required_auth_state": pa.required_auth_state, "action_id": pa.id})
+            "required_auth_state": pa.required_auth_state, "action_id": pa.id, "summary": pa.summary,
+            "details": redact_data(pa.arguments, RedactionProfile.AUDIT), "risk_level": pa.risk_level})
 
     async def _handle_otp(self, req: AgentRequest, state: SessionState, turn: Turn, code: str) -> AsyncIterator[RuntimeEvent]:
         lang = state.response_language_tag

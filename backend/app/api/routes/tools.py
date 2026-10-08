@@ -22,7 +22,10 @@ async def list_tools(p: StaffPrincipal = Depends(require(Permission.AGENT_READ))
     """The normalised tool catalogue — what the LLM sees, independent of REST/OpenAPI/MCP backing."""
     tools = await c.registry.tools_for(p.tenant_id)
     return [t.llm_view() | {"source": t.source.value, "min_auth_state": t.min_auth_state.value, "enabled": t.enabled,
-                            "internal": t.internal, "requires_confirmation": t.requires_confirmation, "id": t.binding.get("tool_id")}
+                            "internal": t.internal, "requires_confirmation": t.requires_confirmation, "id": t.binding.get("tool_id"),
+                            "integration_id": t.integration_id, "server_id": t.binding.get("server_id"),
+                            "timeout_seconds": t.timeout_seconds, "idempotent": t.idempotent,
+                            "injected_params": sorted(t.injected_params)}
             for t in tools.values()]
 
 
@@ -76,7 +79,8 @@ async def test_tool(tool_id: str, body: ToolTest, p: StaffPrincipal = Depends(re
         raise HTTPException(404, "tool not found")
     if body.simulate_confirmation and c.settings.is_production:
         raise HTTPException(403, "simulate_confirmation is disabled in production")
-    ctx = ToolContext(tenant_id=p.tenant_id, session_id=f"tooltest-{new_id()}", conversation_id="tooltest", customer_id=body.customer_id,
+    # ids must fit the 36-char session/conversation columns; "tool-test" marks these executions in the audit trail
+    ctx = ToolContext(tenant_id=p.tenant_id, session_id=new_id(), conversation_id="tool-test", customer_id=body.customer_id,
                       channel=Channel.CHAT, auth_state=body.auth_state, auth_methods=["otp"],
                       txn_auth_action_hash=action_hash(name, body.arguments) if body.auth_state == AuthState.TRANSACTION_AUTHENTICATED else None)
     grant = ActionGrant(action_hash=action_hash(name, body.arguments), confirmed=True) if body.simulate_confirmation else None

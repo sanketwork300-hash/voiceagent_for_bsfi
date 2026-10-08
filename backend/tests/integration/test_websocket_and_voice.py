@@ -50,8 +50,8 @@ def test_websocket_streaming_events(tmp_path):
             assert "₹10,000" in conf["data"]["summary"]
             evs = turn({"type": "message", "content": "yes"})
             assert "successful" in next(e for e in evs if e["type"] == "message.completed")["response"]["text"].lower()
-        with pytest.raises(WebSocketDisconnect) as exc, client.websocket_connect(f"/ws/chat/{sid}?token=bad"):
-            pass
+        with client.websocket_connect(f"/ws/chat/{sid}?token=bad") as bad, pytest.raises(WebSocketDisconnect) as exc:
+            bad.receive_json()
         assert exc.value.code == 1008
         msgs = client.get(f"/sessions/{sid}/messages", headers={"Authorization": f"Bearer {token}"}).json()
         assert "123456" not in str(msgs)

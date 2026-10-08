@@ -23,6 +23,7 @@ from app.api.routes import (
     integrations,
     knowledge,
     mcp,
+    monitoring,
     policies,
     sessions,
     tenants,
@@ -76,7 +77,7 @@ def create_app(settings: Settings | None = None, container: Container | None = N
         return JSONResponse(status_code=403, content={"detail": str(exc) or "forbidden"})
 
     for module in (health, auth, tenants, users, agents, sessions, chat, voice, conversations, documents, knowledge,
-                   integrations, mcp, tools, policies, handoff, audit, evaluation):
+                   integrations, mcp, tools, policies, handoff, audit, evaluation, monitoring):
         app.include_router(module.router)
     return app
 

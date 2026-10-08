@@ -30,18 +30,22 @@ async def chat_message(body: ChatMessage, p: SessionPrincipal = Depends(current_
 @router.websocket("/ws/chat/{session_id}")
 async def chat_ws(ws: WebSocket, session_id: str, token: str = Query(...)) -> None:
     c = ws.app.state.container
+
+    async def reject() -> None:
+        # Accept-then-close so browsers receive the 1008 code (a pre-handshake rejection surfaces only as 1006),
+        # letting clients stop retrying. Nothing is sent before the close.
+        await ws.accept()
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION)
+
     try:
         claims = c.jwt.verify(token, "session")
     except TokenError:
-        await ws.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
+        return await reject()
     if claims["sub"] != session_id:
-        await ws.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
+        return await reject()
     try:
         await c.sessions.get(session_id, claims["tenant_id"])
     except LookupError:
-        await ws.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
+        return await reject()
     await ws.accept()
     await WebSocketChatChannel(ws, c, session_id, claims["tenant_id"]).serve()

@@ -80,7 +80,7 @@ for offline use only — use a multilingual embedding model in production.
 ## Tests, evaluation, load
 
 ```bash
-pytest                                                    # 115 unit / integration / security / evaluation tests
+pytest                                                    # 119 unit / integration / security / evaluation tests
 BFSI_INFRA_TESTS=1 pytest tests/integration/test_real_infrastructure.py   # against real Postgres/Redis/ES
 docker compose exec backend python -m scripts.run_evaluation              # scenario suite on chat AND voice
 python -m scripts.load_test --users 25 --turns 8                          # concurrency + latency percentiles
@@ -96,17 +96,21 @@ authorization / grounding / safety accuracy and latency. It is also exposed at `
 
 | | |
 |---|---|
-| Auth & tenancy | `POST /auth/login`, `POST /tenants`, `GET /tenants/me`, `POST/GET /users`, `POST/GET /agents`, `GET /agents/{id}` |
+| Auth & tenancy | `POST /auth/login`, `POST /tenants`, `GET /tenants/me`, `POST/GET /users`, `POST/GET /agents`, `GET/PATCH /agents/{id}` |
 | Sessions | `POST /sessions` (optional bank-IdP `customer_assertion`), `GET /sessions/{id}`, `POST /sessions/{id}/auth/{assertion,identify,otp/send,otp/verify}`, `POST /sessions/{id}/close`, `GET /sessions/{id}/messages` |
 | Chat | `POST /chat/message`, `WS /ws/chat/{session_id}?token=` (streams `message.delta`, `tool.started`, `tool.completed`, `auth.required`, `confirmation.required`, `handoff.initiated`, `message.completed`, ...) |
 | Voice | `POST /voice/session` (new, or switch an existing session to voice), `POST /voice/token`, `POST /voice/simulate` (dev) |
 | Knowledge | `POST /documents` (versioned upload), `GET /documents`, `POST /documents/{id}/reindex`, `POST /knowledge/search` |
-| Integrations & tools | `POST/GET /integrations`, `POST /integrations/{id}/test`, `POST /integrations/{id}/import-openapi`, `POST /mcp/servers`, `GET /mcp/servers/{id}/tools`, `POST /mcp/servers/{id}/discover`, `GET /tools`, `PATCH /tools/{id}`, `POST /tools/{id}/test` |
+| Integrations & tools | `POST/GET /integrations`, `POST /integrations/{id}/test`, `POST /integrations/{id}/import-openapi`, `POST/GET /mcp/servers`, `GET /mcp/servers/{id}/tools`, `POST /mcp/servers/{id}/discover`, `GET /tools`, `PATCH /tools/{id}`, `POST /tools/{id}/test` |
 | Governance | `POST/GET /policies`, `GET /approvals`, `POST /approvals/{id}/decision`, `GET /audit/events`, `GET /audit/verify` |
 | Handoff | `POST /handoff`, `GET /handoff/queue`, `POST /handoff/{id}/{accept,reply,resolve}`, `WS /ws/desk?token=` |
-| Ops | `GET /health`, `GET /ready`, `GET /metrics`, `POST /evaluation/runs`, `GET /evaluation/runs/{id}` |
+| Ops | `GET /health`, `GET /ready`, `GET /metrics`, `GET /monitoring/summary`, `GET /monitoring/activity`, `POST /evaluation/runs`, `GET /evaluation/runs/{id}` |
 
 Interactive docs: `http://localhost:8000/docs`.
+
+Failed tool calls carry a `failure_kind` (on `tool.failed` events as `outcome`): `not_executed` (never sent),
+`rejected` (the institution declined it — nothing processed) or `unknown` (sent but unconfirmed). Clients must only
+tell a customer "no amount was debited" for the first two.
 
 ## Repository layout
 

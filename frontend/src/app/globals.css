@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ design tokens */
+:root {
+  --background: #050505;
+  --surface: #0a0a0a;
+  --surface-raised: #111111;
+  --surface-hover: #161616;
+  --border: #1a1a1a;
+  --border-strong: #2a2a2a;
+  --muted: #8a8a8a; /* brief's #777 lifted for AA contrast on small text */
+  --subtle: #808080; /* brief #777 lifted: 4.42:1 fails AA for small text on #0a0a0a, #808080 is 5.0:1 */
+  --foreground: #e5e5e5;
+  --strong: #ffffff;
+  --success: #4caf7d;
+  --warning: #d9a441;
+  --danger: #e5534b;
+  --info: #7a96cf;
+  --voice: #a8c0ff;
+
+  --radius-control: 6px;
+  --radius-panel: 10px;
+  --radius-pill: 999px;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --z-sticky: 20;
+  --z-overlay: 40;
+  --z-modal: 50;
+  --z-palette: 60;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-raised: var(--surface-raised);
+  --color-hover: var(--surface-hover);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-foreground: var(--foreground);
+  --color-strong: var(--strong);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --color-voice: var(--voice);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --radius-control: var(--radius-control);
+  --radius-panel: var(--radius-panel);
+  --text-meta: 11.5px;
+  --text-small: 13px;
+  --text-body: 14px;
+  --text-lead: 16px;
+  --text-section: 19px;
+  --text-title: 26px;
+}
+
+@layer base {
+html { color-scheme: dark; }
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01", "cv11";
+}
+::selection { background: #ffffff26; }
+
+/* visible, consistent focus for keyboard users */
+:focus-visible { outline: 2px solid var(--strong); outline-offset: 2px; border-radius: 4px; }
+}
+
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* faint engineering grid used only behind the workspace header and voice stage */
+.grid-lines {
+  background-image:
+    linear-gradient(to right, #ffffff07 1px, transparent 1px),
+    linear-gradient(to bottom, #ffffff07 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* receipt tear line for financial action slips */
+.tear {
+  height: 1px;
+  background-image: linear-gradient(to right, var(--border-strong) 50%, transparent 50%);
+  background-size: 8px 1px;
+}
+
+/* production environment marker */
+.prod-stripe { background: repeating-linear-gradient(135deg, #d9a44122 0 6px, transparent 6px 12px); }
+
+@keyframes pulse-dot { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
+.animate-pulse-dot { animation: pulse-dot 1.6s var(--ease) infinite; }
+@keyframes shimmer { 0% { background-position: -400px 0 } 100% { background-position: 400px 0 } }
+.skeleton {
+  background: linear-gradient(90deg, #111 0px, #1a1a1a 80px, #111 160px);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+}
+
+/* markdown inside assistant messages */
+.prose-agent p { margin: 0 0 .6em; }
+.prose-agent p:last-child { margin-bottom: 0; }
+.prose-agent ul, .prose-agent ol { margin: .3em 0 .6em 1.2em; }
+.prose-agent ul { list-style: disc; } .prose-agent ol { list-style: decimal; }
+.prose-agent table { border-collapse: collapse; margin: .5em 0; font-size: var(--text-small); }
+.prose-agent th, .prose-agent td { border-bottom: 1px solid var(--border-strong); padding: 4px 10px 4px 0; text-align: left; }
+.prose-agent code { font-family: var(--font-mono); font-size: 12.5px; background: var(--surface-raised); padding: 1px 4px; border-radius: 4px; }
+.prose-agent strong { color: var(--strong); font-weight: 600; }
+.prose-agent a { text-decoration: underline; text-underline-offset: 2px; }

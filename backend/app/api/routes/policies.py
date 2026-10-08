@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from app.api.deps import container
 from app.auth.authorization import StaffPrincipal, require
@@ -52,7 +53,11 @@ async def create_policy(body: PolicyCreate, p: StaffPrincipal = Depends(require(
 @router.get("/policies")
 async def list_policies(p: StaffPrincipal = Depends(require(Permission.POLICY_MANAGE)), c=Depends(container)) -> dict:
     effective = await c.policy.rules_for(p.tenant_id)
-    return {"effective": [r.model_dump() for r in effective], "defaults": [r.id for r in DEFAULT_RULES]}
+    async with c.db.session() as s:
+        disabled = (await s.execute(select(Policy).where(Policy.tenant_id == p.tenant_id, Policy.is_enabled.is_(False)))).scalars().all()
+    return {"effective": [r.model_dump() for r in effective], "defaults": [r.id for r in DEFAULT_RULES],
+            "disabled": [{"id": r.id, "name": r.name, "priority": r.priority, "conditions": r.conditions, "effect": r.effect,
+                          "params": r.params, "enabled": False} for r in disabled]}
 
 
 @router.get("/approvals")

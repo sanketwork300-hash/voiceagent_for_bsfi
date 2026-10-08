@@ -39,6 +39,36 @@ async def create_agent(body: AgentCreate, p: StaffPrincipal = Depends(require(Pe
     return _view(a)
 
 
+class AgentUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    persona_prompt: str | None = None
+    allowed_tools: list[str] | None = None
+    clear_tool_restriction: bool = False  # set allowed_tools back to "all enabled tools"
+    channels: list[str] | None = None
+    languages: list[str] | None = None
+    voice_config: dict | None = None
+    llm_config: dict | None = None
+    is_active: bool | None = None
+
+
+@router.patch("/{agent_id}")
+async def update_agent(agent_id: str, body: AgentUpdate, p: StaffPrincipal = Depends(require(Permission.AGENT_MANAGE)), c=Depends(container)) -> dict:
+    changes = body.model_dump(exclude_none=True, exclude={"clear_tool_restriction"})
+    async with c.db.session() as s:
+        a = await TenantRepository(s, Agent, p.tenant_id).get(agent_id)
+        if a is None:
+            raise HTTPException(404, "agent not found")
+        for k, v in changes.items():
+            setattr(a, k, v)
+        if body.clear_tool_restriction:
+            a.allowed_tools = None
+    c.directory.invalidate()
+    await c.audit.record(p.tenant_id, "agent.updated", actor_type="staff", actor_id=p.user_id, resource=agent_id,
+                         payload={"fields": sorted(changes) + (["allowed_tools"] if body.clear_tool_restriction else [])})
+    return _view(a)
+
+
 @router.get("")
 async def list_agents(p: StaffPrincipal = Depends(require(Permission.AGENT_READ)), c=Depends(container)) -> list[dict]:
     async with c.db.session() as s:

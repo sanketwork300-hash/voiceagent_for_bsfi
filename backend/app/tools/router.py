@@ -85,7 +85,7 @@ class ToolGateway:
                                     channel=ctx.channel.value, resource=call.name, outcome="blocked")
             metrics.tool_calls.labels(ctx.channel.value, call.name[:64], "rejected").inc()
             return GatewayOutcome(call=call, tool=None, decision=None, arguments={}, execution_id=exec_id,
-                                  result=ToolResult(ok=False, error=reason, policy_decision="DENY"))
+                                  result=ToolResult(ok=False, error=reason, policy_decision="DENY", failure_kind="not_executed"))
 
         args = dict(call.arguments)
         smuggled = {k for k in tool.injected_params if k in args}
@@ -99,14 +99,15 @@ class ToolGateway:
             jsonschema.validate(args, tool.llm_schema())
         except jsonschema.ValidationError as e:
             return await self._finish(call, tool, ctx, None, args, exec_id,
-                                      ToolResult(ok=False, error=f"Invalid arguments: {e.message[:200]}"))
+                                      ToolResult(ok=False, error=f"Invalid arguments: {e.message[:200]}", failure_kind="not_executed"))
 
         with span("policy.evaluate", **{"tool.name": tool.name, "tool.risk": tool.risk_level.value}):
             decision = await self.policy.evaluate(tool, args, ctx, allowed_tools=allowed_tools, grant=grant)
         metrics.policy_decisions.labels(ctx.channel.value, decision.decision.value, decision.risk_level.value).inc()
         if decision.decision != PolicyDecisionType.ALLOW:
             return await self._finish(call, tool, ctx, decision, args, exec_id,
-                                      ToolResult(ok=False, error=decision.reason, policy_decision=decision.decision.value))
+                                      ToolResult(ok=False, error=decision.reason, policy_decision=decision.decision.value,
+                                                 failure_kind="not_executed"))
 
         full_args = {**args, **{p: ctx.value_for(key) for p, key in tool.injected_params.items()}}
         result = await self._run(tool, full_args, ctx)
@@ -116,7 +117,7 @@ class ToolGateway:
         """Platform-initiated calls (OTP send/verify). Never reachable from LLM output."""
         tool = await self.registry.get(ctx.tenant_id, name)
         if tool is None:
-            return ToolResult(ok=False, error=f"{name} is not configured for this institution")
+            return ToolResult(ok=False, error=f"{name} is not configured for this institution", failure_kind="not_executed")
         full_args = {**args, **{p: ctx.value_for(key) for p, key in tool.injected_params.items()}}
         result = await self._run(tool, full_args, ctx, redact_output=False)  # consumed by the platform, not the LLM
         await self._persist(tool, ctx, None, args, result, new_id())
@@ -137,21 +138,22 @@ class ToolGateway:
                     if executor is None:
                         raise ToolExecutionError(f"no executor for {tool.source.value}")
                     data = await executor.execute(tool, args, ctx)
-                ok, err = True, None
+                ok, err, kind = True, None, None
             except ToolExecutionError as e:
                 data, ok, err = None, False, str(e)
+                definite = (e.status_code is not None and 400 <= e.status_code < 500 and e.status_code != 429) or not e.retryable
+                kind = "rejected" if definite else "unknown"
                 sp.set_attribute("tool.error", type(e).__name__)
             except Exception as e:  # noqa: BLE001 - external systems fail in creative ways
                 log.exception("tool execution crashed", extra={"tool": tool.name})
-                data, ok, err = None, False, f"{type(e).__name__}"
+                data, ok, err, kind = None, False, f"{type(e).__name__}", "unknown"
         latency = (time.perf_counter() - started) * 1000
         metrics.tool_latency.labels(ctx.channel.value, tool.name, tool.source.value).observe(latency / 1000)
         metrics.tool_calls.labels(ctx.channel.value, tool.name, "success" if ok else "failure").inc()
         # The LLM never sees full identifiers or authentication secrets, even if the bank API returns them.
         if ok and redact_output:
             data = redact_data(data, RedactionProfile.AUDIT)
-        return ToolResult(ok=ok, data=data if ok else None, error=err,
-                          latency_ms=round(latency, 1))
+        return ToolResult(ok=ok, data=data if ok else None, error=err, latency_ms=round(latency, 1), failure_kind=kind)
 
     async def _finish(self, call, tool, ctx, decision, args, exec_id, result: ToolResult) -> GatewayOutcome:
         await self._persist(tool, ctx, decision, args, result, exec_id)

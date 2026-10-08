@@ -114,6 +114,7 @@ class DocumentService:
             "id": d.id, "title": d.title, "doc_type": d.doc_type, "product": d.product, "language": d.language,
             "access_level": d.access_level, "status": d.status, "current_version_id": d.current_version_id,
             "versions": [{"id": v.id, "version": v.version, "status": v.status, "chunks": v.chunk_count,
-                          "effective_from": v.effective_from, "effective_until": v.effective_until, "error": v.error}
+                          "effective_from": v.effective_from, "effective_until": v.effective_until, "error": v.error,
+                          "created_at": v.created_at, "filename": v.filename}
                          for v in sorted(by_doc.get(d.id, []), key=lambda v: v.created_at)],
         } for d in docs]
