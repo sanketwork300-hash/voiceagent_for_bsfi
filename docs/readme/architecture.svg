@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640" role="img" aria-labelledby="t d">
+<title id="t">Architecture</title>
+<desc id="d">Channels feed one shared agent runtime (reason, plan, policy, execute, verify, respond) which calls the institution through a tool gateway; Redis and PostgreSQL hold shared state.</desc>
+<style>
+
+.flow { stroke-dasharray: 6 6; animation: dash 1s linear infinite; }
+.flow.slow { animation-duration: 2.4s; }
+@keyframes dash { to { stroke-dashoffset: -12; } }
+.stage { animation: sweep 6s ease-in-out infinite; }
+.s0 { animation-delay: 0s; }
+.s1 { animation-delay: 1s; }
+.s2 { animation-delay: 2s; }
+.s3 { animation-delay: 3s; }
+.s4 { animation-delay: 4s; }
+.s5 { animation-delay: 5s; }
+@keyframes sweep { 0% { stroke: #2C2C33; } 4% { stroke: #3DD68C; } 16% { stroke: #3DD68C; } 22% { stroke: #2C2C33; } 100% { stroke: #2C2C33; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+<rect width="1200" height="640" rx="22" fill="#0A0A0B" stroke="#2C2C33"/>
+<text x="40" y="52" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#9C9CA6" text-anchor="start" letter-spacing="3">ARCHITECTURE</text>
+<text x="40" y="82" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="18" font-weight="600" fill="#F4F4F5" text-anchor="start" >Channels are thin adapters. Every decision is made once, in the shared runtime.</text>
+<text x="40" y="124" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#9C9CA6" text-anchor="start" letter-spacing="2">CHANNELS</text>
+<rect x="40" y="136" width="230" height="72" rx="14" fill="#141417" stroke="#2C2C33" /><rect x="40" y="150" width="3" height="44" rx="1.5" fill="#6EA8FE"/><text x="58" y="166" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#F4F4F5" text-anchor="start" >Phone call</text><text x="58" y="188" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >PSTN → LiveKit phone number</text>
+<rect x="40" y="226" width="230" height="72" rx="14" fill="#141417" stroke="#2C2C33" /><rect x="40" y="240" width="3" height="44" rx="1.5" fill="#6EA8FE"/><text x="58" y="256" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#F4F4F5" text-anchor="start" >App / web voice</text><text x="58" y="278" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >WebRTC into a LiveKit room</text>
+<rect x="40" y="316" width="230" height="72" rx="14" fill="#141417" stroke="#2C2C33" /><rect x="40" y="330" width="3" height="44" rx="1.5" fill="#6EA8FE"/><text x="58" y="346" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#F4F4F5" text-anchor="start" >Chat</text><text x="58" y="368" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >REST · WebSocket streaming</text>
+<text x="310" y="124" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#9C9CA6" text-anchor="start" letter-spacing="2">REALTIME</text>
+<rect x="310" y="136" width="240" height="162" rx="14" fill="#141417" stroke="#2C2C33" /><rect x="310" y="150" width="3" height="134" rx="1.5" fill="#6EA8FE"/><text x="328" y="166" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#F4F4F5" text-anchor="start" >LiveKit voice worker</text><text x="328" y="188" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >one room + process per call</text>
+<text x="328" y="220" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >· VAD · turn detection</text>
+<text x="328" y="242" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >· streaming STT / TTS</text>
+<text x="328" y="264" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >· barge-in · neutral acks</text>
+<rect x="310" y="316" width="240" height="72" rx="14" fill="#141417" stroke="#2C2C33" /><rect x="310" y="330" width="3" height="44" rx="1.5" fill="#6EA8FE"/><text x="328" y="346" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#F4F4F5" text-anchor="start" >Chat gateway</text><text x="328" y="368" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >same session, any channel</text>
+<text x="590" y="124" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#9C9CA6" text-anchor="start" letter-spacing="2">AGENT RUNTIME</text>
+<rect x="590" y="136" width="280" height="340" rx="14" fill="#141417" stroke="#2C2C33" />
+<rect class="stage s0" x="606" y="152" width="248" height="44" rx="10" fill="#1B1B1F" stroke="#2C2C33"/>
+<circle cx="626" cy="174" r="5" fill="#F4F4F5"/>
+<text x="642" y="172" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#F4F4F5" text-anchor="start" >Reason</text><text x="642" y="188" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >intent · entities · risk</text>
+<rect class="stage s1" x="606" y="205" width="248" height="44" rx="10" fill="#1B1B1F" stroke="#2C2C33"/>
+<circle cx="626" cy="227" r="5" fill="#F4F4F5"/>
+<text x="642" y="225" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#F4F4F5" text-anchor="start" >Plan</text><text x="642" y="241" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >tool calls → execution DAG</text>
+<rect class="stage s2" x="606" y="258" width="248" height="44" rx="10" fill="#1B1B1F" stroke="#2C2C33"/>
+<circle cx="626" cy="280" r="5" fill="#C9A2FF"/>
+<text x="642" y="278" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#F4F4F5" text-anchor="start" >Policy</text><text x="642" y="294" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >auth · risk · confirmation · approval</text>
+<rect class="stage s3" x="606" y="311" width="248" height="44" rx="10" fill="#1B1B1F" stroke="#2C2C33"/>
+<circle cx="626" cy="333" r="5" fill="#6EA8FE"/>
+<text x="642" y="331" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#F4F4F5" text-anchor="start" >Execute</text><text x="642" y="347" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >parallel reads · serial writes</text>
+<rect class="stage s4" x="606" y="364" width="248" height="44" rx="10" fill="#1B1B1F" stroke="#2C2C33"/>
+<circle cx="626" cy="386" r="5" fill="#3DD68C"/>
+<text x="642" y="384" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#F4F4F5" text-anchor="start" >Verify</text><text x="642" y="400" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >status lookup by idempotency key</text>
+<rect class="stage s5" x="606" y="417" width="248" height="44" rx="10" fill="#1B1B1F" stroke="#2C2C33"/>
+<circle cx="626" cy="439" r="5" fill="#F4F4F5"/>
+<text x="642" y="437" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#F4F4F5" text-anchor="start" >Respond</text><text x="642" y="453" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >grounded text · deterministic prompts</text>
+<text x="910" y="124" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#9C9CA6" text-anchor="start" letter-spacing="2">INSTITUTION</text>
+<rect x="910" y="136" width="250" height="92" rx="14" fill="#141417" stroke="#2C2C33" /><rect x="910" y="150" width="3" height="64" rx="1.5" fill="#F2B45C"/><text x="928" y="166" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#F4F4F5" text-anchor="start" >Tool gateway</text><text x="928" y="188" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >REST · OpenAPI · MCP · adapters</text>
+<text x="928" y="210" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >trusted metadata · timeouts · retries</text>
+<rect x="910" y="246" width="250" height="72" rx="14" fill="#141417" stroke="#2C2C33" /><rect x="910" y="260" width="3" height="44" rx="1.5" fill="#F2B45C"/><text x="928" y="276" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#F4F4F5" text-anchor="start" >Bank / NBFC systems</text><text x="928" y="298" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >system of record · Idempotency-Key</text>
+<rect x="910" y="336" width="250" height="72" rx="14" fill="#141417" stroke="#2C2C33" /><rect x="910" y="350" width="3" height="44" rx="1.5" fill="#F2B45C"/><text x="928" y="366" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#F4F4F5" text-anchor="start" >Knowledge (RAG)</text><text x="928" y="388" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >Elasticsearch BM25 + kNN + rerank</text>
+<rect x="910" y="426" width="250" height="72" rx="14" fill="#141417" stroke="#2C2C33" /><rect x="910" y="440" width="3" height="44" rx="1.5" fill="#C9A2FF"/><text x="928" y="456" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#F4F4F5" text-anchor="start" >Human desk</text><text x="928" y="478" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >handoff with full context</text>
+<rect x="40" y="512" width="1120" height="92" rx="14" fill="#141417" stroke="#2C2C33" />
+<text x="60" y="544" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#F4F4F5" text-anchor="start" >Shared state</text>
+<text x="60" y="568" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >any worker can serve any turn</text>
+<rect x="300" y="528" width="270" height="60" rx="10" fill="#1B1B1F" stroke="#2C2C33" />
+<text x="316" y="553" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#F4F4F5" text-anchor="start" >Redis</text><text x="316" y="573" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >sessions · renewed locks · capacity leases</text>
+<rect x="590" y="528" width="270" height="60" rx="10" fill="#1B1B1F" stroke="#2C2C33" />
+<text x="606" y="553" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#F4F4F5" text-anchor="start" >PostgreSQL</text><text x="606" y="573" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >workflows · calls · tool executions · audit chain</text>
+<rect x="880" y="528" width="270" height="60" rx="10" fill="#1B1B1F" stroke="#2C2C33" />
+<text x="896" y="553" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#F4F4F5" text-anchor="start" >Observability</text><text x="896" y="573" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9C9CA6" text-anchor="start" >OpenTelemetry traces · Prometheus metrics</text>
+<path class="flow" d="M270 172 H310" stroke="#9C9CA6" stroke-width="2" fill="none"/>
+<path class="flow" d="M270 262 H310" stroke="#9C9CA6" stroke-width="2" fill="none"/>
+<path class="flow" d="M270 352 H310" stroke="#9C9CA6" stroke-width="2" fill="none"/>
+<path class="flow" d="M550 217 H590" stroke="#9C9CA6" stroke-width="2" fill="none"/>
+<path class="flow" d="M550 352 H590" stroke="#9C9CA6" stroke-width="2" fill="none"/>
+<path class="flow" d="M870 182 H910" stroke="#9C9CA6" stroke-width="2" fill="none"/>
+<path class="flow" d="M1035 228 V246" stroke="#9C9CA6" stroke-width="2" fill="none"/>
+<path class="flow" d="M870 372 H910" stroke="#9C9CA6" stroke-width="2" fill="none"/>
+<path class="flow" d="M870 450 H910" stroke="#9C9CA6" stroke-width="2" fill="none"/>
+<path class="flow slow" d="M155 388 V512" stroke="#2C2C33" stroke-width="2" fill="none"/>
+<path class="flow slow" d="M430 388 V512" stroke="#2C2C33" stroke-width="2" fill="none"/>
+<path class="flow slow" d="M730 476 V512" stroke="#2C2C33" stroke-width="2" fill="none"/>
+<path class="flow slow" d="M1035 498 V512" stroke="#2C2C33" stroke-width="2" fill="none"/>
+</svg>
