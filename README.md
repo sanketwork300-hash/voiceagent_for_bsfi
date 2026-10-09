@@ -201,10 +201,11 @@ Details: [backend/docs/voice.md](backend/docs/voice.md).
 | `LLM_PROVIDER` | |
 |---|---|
 | `rule_based` *(default)* | deterministic offline stand-in — demos, CI and the evaluation suite run with no API key |
-| `openai` | any OpenAI-compatible endpoint: OpenAI, Anthropic, Gemini, Groq, Mistral, OpenRouter, LiteLLM… |
+| `openai` | any OpenAI-compatible endpoint: OpenAI, Anthropic, Gemini, NVIDIA NIM (Nemotron), Groq, Mistral, OpenRouter, LiteLLM… |
 | `local` | self-hosted models behind an OpenAI-compatible API: Ollama, vLLM, TGI, llama.cpp |
 
-Set `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`; `LLM_FALLBACK_PROVIDER` adds failover. Whatever the model, it only
+Set `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`; `LLM_EXTRA_BODY` passes provider-specific fields (e.g.
+`{"chat_template_kwargs": {"enable_thinking": false}}` for NVIDIA reasoning models); `LLM_FALLBACK_PROVIDER` adds failover. Whatever the model, it only
 proposes — authentication, policy, confirmation and verification are unchanged.
 
 </details>

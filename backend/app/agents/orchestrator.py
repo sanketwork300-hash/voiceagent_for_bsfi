@@ -28,6 +28,7 @@ from typing import Any
 
 from app.agents.execution import ExecutionEngine
 from app.agents.execution.executor import ExecutionContext, StepEvent
+from app.agents.execution.templates import template_for
 from app.agents.execution.models import (
     ACTIVE_WORKFLOW,
     ExecutionResult,
@@ -278,6 +279,7 @@ class Orchestrator:
         profile = await self.profiles.get(state.tenant_id, state.agent_id)
         all_tools = await self.registry.tools_for(state.tenant_id)
         offered = select_tools(all_tools, intent=plan.intent, agent_allowlist=profile.allowed_tools)
+        offered = _without_template_helpers(offered, all_tools)
         allowed = self._allowed(profile, all_tools)
         messages = await self._base_messages(state, req, plan.intent, history, profile)
         specs = [t.llm_spec() for t in offered.values()] or None
@@ -298,6 +300,9 @@ class Orchestrator:
                 elif ev.type == "done":
                     resp = ev.response
             if resp is None or not resp.tool_calls:
+                if not turn.text:  # never send an empty reply (model returned nothing usable)
+                    async for ev in self._say(turn, msg("error", state.response_language_tag)):
+                        yield ev
                 return  # RESPOND: the model answered from the tool results it has
             calls = list(resp.tool_calls)
             messages.append(LLMMessage(role="assistant", content=resp.content or None, tool_calls=calls))
@@ -1115,6 +1120,14 @@ class Orchestrator:
             authentication_state=state.authentication_state, session_id=state.session_id,
             conversation_id=state.conversation_id, message_id=message_id, interrupted=turn.interrupted, error=turn.error,
         )
+
+
+def _without_template_helpers(offered: dict[str, ToolDefinition], all_tools: dict[str, ToolDefinition]) -> dict[str, ToolDefinition]:
+    """When an action's server-side workflow template applies, its helper steps (e.g. find_beneficiary before
+    transfer_money) are run by the platform; offering them too invites the model to run its own lookup-and-confirm
+    dialogue around the action."""
+    helpers = {h for tool in offered if (tpl := template_for(tool, all_tools)) for h in tpl.helper_tools}
+    return {n: t for n, t in offered.items() if n not in helpers}
 
 
 def _resolved_payee(wf: WorkflowState | None, step: ExecutionStep | None) -> str | None:

@@ -85,3 +85,37 @@ async def test_failover_to_fallback_before_first_token():
     assert r.provider == "rule_based"
     with pytest.raises(LLMError):
         await ResilientLLMProvider(down).complete([LLMMessage(role="user", content="x")])
+
+
+async def test_extra_body_is_sent_and_transient_errors_retried_once():
+    seen, calls = [], {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        seen.append(json.loads(req.content))
+        if calls["n"] == 1:
+            return httpx.Response(503, json={"error": "overloaded"})
+        return httpx.Response(200, json={"model": "m", "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}]})
+
+    p = OpenAICompatibleProvider(base_url="http://llm/v1", api_key="k", model="m",
+                                 extra_body={"chat_template_kwargs": {"enable_thinking": False}, "model": "ignored"})
+    p._client = httpx.AsyncClient(base_url="http://llm/v1", transport=httpx.MockTransport(handler))
+    r = await p.complete([LLMMessage(role="user", content="hi")])
+    assert r.content == "ok" and calls["n"] == 2
+    assert seen[-1]["chat_template_kwargs"] == {"enable_thinking": False} and seen[-1]["model"] == "m"  # extras never override
+
+
+async def test_sse_error_event_on_http_200_is_retried_then_raised():
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        sse = 'data: {"error": {"message": "Service temporarily overloaded", "code": 503}}\n\ndata: [DONE]\n\n'
+        return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+    p = OpenAICompatibleProvider(base_url="http://llm/v1", api_key="k", model="m")
+    p._client = httpx.AsyncClient(base_url="http://llm/v1", transport=httpx.MockTransport(handler))
+    with pytest.raises(LLMError):
+        async for _ in p.stream([LLMMessage(role="user", content="hi")]):
+            pass
+    assert calls["n"] == 2  # one retry, then failure (so the resilient wrapper can fail over)

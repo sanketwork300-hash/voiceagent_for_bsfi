@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from typing import Any
@@ -56,10 +57,14 @@ class OpenAICompatibleProvider(LLMProvider):
         temperature: float = 0.1,
         extra_headers: dict[str, str] | None = None,
         parallel_tool_calls: bool = True,
+        extra_body: dict[str, Any] | None = None,
+        transient_retries: int = 1,
     ) -> None:
         self.model = model
         self.temperature = temperature
         self.parallel_tool_calls = parallel_tool_calls
+        self.extra_body = dict(extra_body or {})
+        self.transient_retries = transient_retries
         headers = {"Content-Type": "application/json", **(extra_headers or {})}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -88,13 +93,28 @@ class OpenAICompatibleProvider(LLMProvider):
             )
         if stream:
             body["stream_options"] = {"include_usage": True}
-        return body
+        # provider-specific extras (e.g. chat_template_kwargs) never override the fields set above
+        return {**{k: v for k, v in self.extra_body.items() if k not in body}, **body}
+
+    async def _with_retry(self, fn):
+        """One short retry on 429/502/503/504 (shared endpoints get overloaded) before failing over."""
+        for attempt in range(self.transient_retries + 1):
+            try:
+                return await fn()
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code not in (429, 502, 503, 504) or attempt == self.transient_retries:
+                    raise
+                await asyncio.sleep(0.5 * (attempt + 1))
 
     async def complete(self, messages, *, tools=None, tool_choice=None, temperature=None, max_tokens=None, json_schema=None) -> LLMResponse:
         body = self._payload(messages, tools, tool_choice, temperature, max_tokens, json_schema, stream=False)
+        async def post() -> httpx.Response:
+            resp = await self._client.post("/chat/completions", json=body, headers=inject_headers({}))
+            resp.raise_for_status()
+            return resp
+
         try:
-            r = await self._client.post("/chat/completions", json=body, headers=inject_headers({}))
-            r.raise_for_status()
+            r = await self._with_retry(post)
         except httpx.HTTPError as e:
             raise LLMError(f"{self.name} request failed: {e}") from e
         data = r.json()
@@ -120,31 +140,49 @@ class OpenAICompatibleProvider(LLMProvider):
         calls: dict[int, dict[str, Any]] = {}
         usage = LLMUsage()
         finish = None
+        attempt = 0
         try:
-            async with self._client.stream("POST", "/chat/completions", json=body, headers=inject_headers({})) as r:
-                r.raise_for_status()
-                async for line in r.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    payload = line[5:].strip()
-                    if payload == "[DONE]":
-                        break
-                    chunk = json.loads(payload)
-                    if u := chunk.get("usage"):
-                        usage = LLMUsage(prompt_tokens=u.get("prompt_tokens", 0), completion_tokens=u.get("completion_tokens", 0))
-                    for choice in chunk.get("choices") or []:
-                        delta = choice.get("delta") or {}
-                        finish = choice.get("finish_reason") or finish
-                        if text := delta.get("content"):
-                            content.append(text)
-                            if not calls:  # don't stream narration that accompanies a tool call
-                                yield LLMStreamEvent(type="delta", delta=text)
-                        for tc in delta.get("tool_calls") or []:
-                            slot = calls.setdefault(tc.get("index", 0), {"id": None, "name": "", "args": ""})
-                            slot["id"] = tc.get("id") or slot["id"]
-                            fn = tc.get("function") or {}
-                            slot["name"] += fn.get("name") or ""
-                            slot["args"] += fn.get("arguments") or ""
+            while True:
+                retry = False
+                async with self._client.stream("POST", "/chat/completions", json=body, headers=inject_headers({})) as r:
+                    # one short retry on an overloaded endpoint, only before anything has been received
+                    if r.status_code in (429, 502, 503, 504) and attempt < self.transient_retries:
+                        retry = True
+                    else:
+                        r.raise_for_status()
+                        async for line in r.aiter_lines():
+                            if not line.startswith("data:"):
+                                continue
+                            payload = line[5:].strip()
+                            if payload == "[DONE]":
+                                break
+                            chunk = json.loads(payload)
+                            if err := chunk.get("error"):
+                                # some gateways report overload as an SSE error event on an HTTP 200 stream
+                                code = err.get("code") if isinstance(err, dict) else None
+                                if code in (429, 502, 503, 504) and not content and not calls and attempt < self.transient_retries:
+                                    retry = True
+                                    break
+                                raise LLMError(f"{self.name} stream error: {str(err)[:200]}")
+                            if u := chunk.get("usage"):
+                                usage = LLMUsage(prompt_tokens=u.get("prompt_tokens", 0), completion_tokens=u.get("completion_tokens", 0))
+                            for choice in chunk.get("choices") or []:
+                                delta = choice.get("delta") or {}
+                                finish = choice.get("finish_reason") or finish
+                                if text := delta.get("content"):
+                                    content.append(text)
+                                    if not calls:  # don't stream narration that accompanies a tool call
+                                        yield LLMStreamEvent(type="delta", delta=text)
+                                for tc in delta.get("tool_calls") or []:
+                                    slot = calls.setdefault(tc.get("index", 0), {"id": None, "name": "", "args": ""})
+                                    slot["id"] = tc.get("id") or slot["id"]
+                                    fn = tc.get("function") or {}
+                                    slot["name"] += fn.get("name") or ""
+                                    slot["args"] += fn.get("arguments") or ""
+                if not retry:
+                    break
+                attempt += 1
+                await asyncio.sleep(0.5 * attempt)
         except httpx.HTTPError as e:
             raise LLMError(f"{self.name} stream failed: {e}") from e
         yield LLMStreamEvent(

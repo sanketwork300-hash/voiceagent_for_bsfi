@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 30.0
     llm_temperature: float = 0.1
     llm_parallel_tool_calls: bool = True  # let the model propose several tool calls per turn (scheduled by the engine)
+    # Provider-specific request fields merged into every chat request, e.g. NVIDIA NIM / vLLM reasoning models:
+    # LLM_EXTRA_BODY={"chat_template_kwargs": {"enable_thinking": false}}
+    llm_extra_body: dict = Field(default_factory=dict)
+    # "llm": intent via structured output (lexicon fallback); "lexicon": fast keyword rules only (saves one model
+    # round trip per turn — useful for voice with slower models)
+    intent_classifier: Literal["llm", "lexicon"] = "llm"
 
     # --- orchestration: agent loop + execution engine (limits are configuration, validated below) ---
     worker_id: str = Field(default_factory=lambda: f"{socket.gethostname()}:{os.getpid()}")

@@ -44,12 +44,16 @@ class TurnPlan:
 
 
 class IntentClassifier:
-    def __init__(self, llm: LLMProvider, min_confidence: float = 0.55) -> None:
+    def __init__(self, llm: LLMProvider, min_confidence: float = 0.55, use_llm: bool = True) -> None:
         self.llm = llm
         self.min_confidence = min_confidence
+        self.use_llm = use_llm  # False: keyword rules only (no model round trip before the main turn)
 
     async def classify(self, text: str, recent: list[str]) -> IntentClassification:
         context = "\n".join(f"- {r}" for r in recent[-3:]) or "(none)"
+        if not self.use_llm:
+            intent, conf, ents = lexicon.rule_classify(text)
+            return IntentClassification(intent=Intent(intent), confidence=conf, entities=ents, reasoning="lexicon fallback")
         try:
             out = await self.llm.structured([
                 LLMMessage(role="system", content=CLASSIFIER_PROMPT),

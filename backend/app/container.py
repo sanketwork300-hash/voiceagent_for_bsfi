@@ -137,7 +137,7 @@ class Container:
 
         # Runtime
         self.directory = AgentDirectory(self.db)
-        self.planner = Planner(IntentClassifier(self.llm))
+        self.planner = Planner(IntentClassifier(self.llm, use_llm=s.intent_classifier == "llm"))
         self.orchestrator = Orchestrator(
             settings=s, sessions=self.sessions, memory=self.memory, llm=self.llm, planner=self.planner,
             registry=self.registry, gateway=self.gateway, auth=self.customer_auth, handoff=self.handoff,

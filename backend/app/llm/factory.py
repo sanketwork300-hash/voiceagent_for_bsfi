@@ -11,13 +11,13 @@ def _build(kind: str, s: Settings) -> LLMProvider | None:
 
         return OpenAICompatibleProvider(base_url=s.llm_base_url, api_key=s.llm_api_key, model=s.llm_model,
                                         timeout=s.llm_timeout_seconds, temperature=s.llm_temperature,
-                                        parallel_tool_calls=s.llm_parallel_tool_calls)
+                                        parallel_tool_calls=s.llm_parallel_tool_calls, extra_body=s.llm_extra_body)
     if kind == "local":
         from app.llm.local import LocalLLMProvider
 
         return LocalLLMProvider(base_url=s.llm_base_url, api_key=s.llm_api_key, model=s.llm_model,
                                 timeout=s.llm_timeout_seconds, temperature=s.llm_temperature,
-                                parallel_tool_calls=s.llm_parallel_tool_calls)
+                                parallel_tool_calls=s.llm_parallel_tool_calls, extra_body=s.llm_extra_body)
     if kind == "rule_based":
         from app.llm.rule_based import RuleBasedLLMProvider
 

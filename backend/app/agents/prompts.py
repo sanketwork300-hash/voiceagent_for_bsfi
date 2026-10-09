@@ -149,7 +149,9 @@ def msg(key: str, lang_tag: str, **kw: Any) -> str:
 INTENT_GUIDANCE = {
     Intent.KNOWLEDGE_QUERY: "This looks like a product/policy question: call search_knowledge and answer only from its sources, citing [n].",
     Intent.CUSTOMER_DATA_QUERY: "This looks like a question about the customer's own data: use the matching read tool; never estimate.",
-    Intent.ACTION_REQUEST: "This looks like an action request: gather any missing details, then call the tool. The platform will handle authentication and confirmation.",
+    Intent.ACTION_REQUEST: ("This looks like an action request: gather any missing details (e.g. amount and payee), then call the action tool "
+                            "right away. Do NOT ask the customer to confirm and do NOT look up the payee yourself: the platform resolves the "
+                            "beneficiary, asks for OTP and confirmation with the exact details, and executes only after that."),
     Intent.FRAUD_REQUEST: "Possible fraud: be calm and brief, offer to block the card, and escalate with request_human_handoff(reason=FRAUD).",
     Intent.GENERAL_CONVERSATION: "General conversation: be helpful and brief; steer to what you can help with.",
     Intent.HUMAN_HANDOFF: "The customer wants a human: call request_human_handoff.",
